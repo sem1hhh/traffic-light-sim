@@ -1,0 +1,27 @@
+# Derleme ciktilari
+build/
+cmake-build-*/
+out/
+
+# Simulasyon / deney ciktilari
+csv/
+*.csv
+*.qmodel
+
+# GlistEngine
+GlistEngine/
+glistengine/
+libs/
+extern/
+
+# Model ve varlik dosyalari (CC0 modeller harici kaynaktan indirilir)
+assets/kenney/
+
+# IDE
+.vscode/
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+
+# macOS
+.DS_Store
