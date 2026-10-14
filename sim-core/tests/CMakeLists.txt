@@ -1,6 +1,10 @@
-add_executable(run_tests test_main.cpp test_types.cpp)
+add_executable(run_tests
+    test_main.cpp
+    test_types.cpp
+    test_rng.cpp
+)
 
-target_link_libraries(run_tests PRIVATE tsc_types third_party)
+target_link_libraries(run_tests PRIVATE tsc_core third_party)
 
 # Cikti yolunu her yerde ayni tut sabit tut.
 set_target_properties(run_tests PROPERTIES
