@@ -6,6 +6,7 @@ add_library(tsc_core STATIC
     src/world.cpp
     src/intersection.cpp
     src/controller.cpp
+    src/car_following.cpp
 )
 
 target_include_directories(tsc_core PUBLIC include)
