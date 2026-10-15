@@ -123,8 +123,12 @@ public:
     /// Sinyalli kavsaklar (faz plani olan dugumler).
     std::vector<JunctionId> signalJunctions() const;
 
-    /// Giriş/cikis yapilabilecek cikmaaz uclari.
+    /// Giriş/cikis yapilabilecek cikmaaz uclari: cikmaaz dugumden BASLAYAN seritler.
     std::vector<LaneId> boundaryLanes() const;
+
+    /// Cikis yapilabilecek seritler: cikmaaz dugumde BITEN seritler.
+    /// Arac bu seritte sona ulastiginda yola ulasmis sayilir.
+    std::vector<LaneId> exitLanes() const;
 
     /// Bir seritten cikan tum baglantilar.
     std::vector<ConnectionId> connectionsFrom(LaneId laneId) const;
@@ -136,6 +140,10 @@ public:
     /// from seritinden to seritine yol var mi?
     bool canReach(LaneId from, LaneId to) const;
 
+    /// En kisa yolun serit dizisi: [from, ..., to]. Ulasilamazsa bos.
+    /// Deterministiktir; esit mesafede LaneId sirasiyla kirilir.
+    std::vector<LaneId> shortestPath(LaneId from, LaneId to) const;
+
 private:
     friend Network buildNetwork(const Grid&);
 
@@ -145,6 +153,7 @@ private:
     std::vector<LaneId> laneIds_;
     std::vector<ConnectionId> connectionIds_;
     std::vector<LaneId> boundaryLanes_;
+    std::vector<LaneId> exitLanes_;
     /// laneId -> o seritten cikan baglanti indisleri (komsuluk icin)
     std::vector<std::vector<std::uint32_t>> outgoingConnections_;
     /// Uretim sirasinda tespit edilen, agi kullanilamaz yapan sorunlar.

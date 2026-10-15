@@ -113,6 +113,16 @@ std::vector<JunctionId> Network::signalJunctions() const {
 
 std::vector<LaneId> Network::boundaryLanes() const { return boundaryLanes_; }
 
+std::vector<LaneId> Network::exitLanes() const {
+    std::vector<LaneId> out;
+    for (const Lane& l : lanes_) {
+        if (popcount4(nodes_[l.to.value].arms) == 1) {
+            out.push_back(l.id);
+        }
+    }
+    return out;
+}
+
 std::vector<ConnectionId> Network::connectionsFrom(LaneId laneId) const {
     std::vector<ConnectionId> out;
     if (!laneId.valid() || laneId.value >= outgoingConnections_.size()) {
@@ -174,6 +184,67 @@ std::vector<std::pair<LaneId, double>> Network::reachableFrom(LaneId start) cons
         }
     }
     return sonuc;
+}
+
+std::vector<LaneId> Network::shortestPath(LaneId from, LaneId to) const {
+    std::vector<LaneId> yol;
+    if (!from.valid() || !to.valid()) {
+        return yol;
+    }
+    if (from == to) {
+        yol.push_back(from);
+        return yol;
+    }
+
+    const std::size_t n = lanes_.size();
+    if (from.value >= n || to.value >= n) {
+        return yol;
+    }
+
+    const double kSonsuz = std::numeric_limits<double>::infinity();
+    std::vector<double> mesafe(n, kSonsuz);
+    std::vector<std::uint32_t> onceki(n, 0xFFFFFFFFu);
+
+    using Giris = std::pair<double, std::uint32_t>;
+    std::priority_queue<Giris, std::vector<Giris>, std::greater<Giris>> kuyruk;
+    mesafe[from.value] = 0.0;
+    kuyruk.push({0.0, from.value});
+
+    while (!kuyruk.empty()) {
+        const auto [d, u] = kuyruk.top();
+        kuyruk.pop();
+        if (d > mesafe[u]) {
+            continue;
+        }
+        if (u == to.value) {
+            break;
+        }
+        for (const std::uint32_t ci : outgoingConnections_[u]) {
+            const Connection& c = connections_[ci];
+            if (!c.allowed) {
+                continue;
+            }
+            const std::uint32_t v = c.toLane.value;
+            const double yeni = d + lanes_[v].length;
+            if (yeni < mesafe[v]) {
+                mesafe[v] = yeni;
+                onceki[v] = u;
+                kuyruk.push({yeni, v});
+            }
+        }
+    }
+
+    if (mesafe[to.value] == kSonsuz) {
+        return yol;
+    }
+    for (std::uint32_t cur = to.value; cur != 0xFFFFFFFFu; cur = onceki[cur]) {
+        yol.push_back(LaneId::from(cur));
+        if (cur == from.value) {
+            break;
+        }
+    }
+    std::reverse(yol.begin(), yol.end());
+    return yol;
 }
 
 bool Network::canReach(LaneId from, LaneId to) const {
@@ -341,6 +412,9 @@ Network buildNetwork(const Grid& grid) {
             // Cikmaaz ucu: baslangic dugumu tek kollu ise bu serit bir "sinir seridi"tir.
             if (popcount4(net.nodes_[fromIdx].arms) == 1) {
                 net.boundaryLanes_.push_back(LaneId::from(laneIdx));
+            }
+            if (popcount4(net.nodes_[static_cast<std::size_t>(hedefIdx)].arms) == 1) {
+                net.exitLanes_.push_back(LaneId::from(laneIdx));
             }
         }
     }

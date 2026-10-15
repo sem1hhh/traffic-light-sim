@@ -96,6 +96,27 @@ public:
     std::uint64_t seed() const noexcept { return seedOf_; }
     std::uint64_t stream() const noexcept { return streamOf_; }
 
+    /// Anlik goruntu (snapshot) icin tum uretecin durumu.
+    /// Yalnizca state_ ve inc_ yeterlidir; cikti dizisi bunlardan turetilir.
+    struct State {
+        std::uint64_t state = 0;
+        std::uint64_t inc = 1;
+        std::uint64_t seed = 0;
+        std::uint64_t stream = 0;
+    };
+
+    State state() const noexcept { return State{state_, inc_, seedOf_, streamOf_}; }
+
+    /// Kaydedilmis durumdan ayni diziyi aynen devam ettiren uretec.
+    static Rng fromState(const State& s) noexcept {
+        Rng r;
+        r.state_ = s.state;
+        r.inc_ = s.inc;
+        r.seedOf_ = s.seed;
+        r.streamOf_ = s.stream;
+        return r;
+    }
+
 private:
     std::uint64_t state_ = 0;
     std::uint64_t inc_ = 1;
