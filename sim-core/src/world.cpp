@@ -130,7 +130,7 @@ void World::maybeSpawn() {
         const std::vector<LaneId>& entries = network_.boundaryLanes();
         const std::vector<LaneId>& exits = network_.exitLanes();
         if (entries.empty() || exits.empty()) {
-            nextSpawnTime_ = time_ + config_.spawnInterval;
+            nextSpawnTime_ = time_ + nextSpawnInterval();
             return;  // agda giris/cikis yok
         }
 
@@ -145,7 +145,7 @@ void World::maybeSpawn() {
             continue;
         }
         spawnVehicle(entry, exit);
-        nextSpawnTime_ += config_.spawnInterval;
+        nextSpawnTime_ += nextSpawnInterval();
     }
 }
 
@@ -211,6 +211,51 @@ void World::updateStallState() {
         metrics_.stalledSteps = 0;  // olay sayaci tekrar tekrar artmasin
     }
 }
+
+const char* toString(DemandProfile p) noexcept {
+    switch (p) {
+        case DemandProfile::Uniform:     return "sabit";
+        case DemandProfile::MorningPeak: return "sabah-zirvesi";
+        case DemandProfile::EveningPeak: return "aksam-zirvesi";
+    }
+    return "?";
+}
+
+double demandMultiplier(DemandProfile profile, double hourOfDay) {
+    // Gauss zirvesi; gece tabani 0.25. Gece asla sifir DEGILDIR.
+    const auto zirve = [hourOfDay](double merkez, double genislik) {
+        const double d = (hourOfDay - merkez) / genislik;
+        return std::exp(-d * d);
+    };
+    // Aralik [0.30, 2.00]. Sabit profil 1.0'dir ve BASLANGIC referansidir;
+    // zirve 2.0 ile onun IKIDEN hizlidir, gece 0.30 ile yavas.
+    // (Once zirve 1.0 idi; boylece 'sabit' profil zirveden hizli cikiyordu
+    //  ve profil hicbir sey degistirmiyordu. Testler bunu yakaladi.)
+    constexpr double kGece = 0.30;
+    constexpr double kZirve = 2.00;
+    switch (profile) {
+        case DemandProfile::Uniform:
+            return 1.0;
+        case DemandProfile::MorningPeak:
+            return kGece + (kZirve - kGece) * zirve(8.0, 1.6);
+        case DemandProfile::EveningPeak:
+            return kGece + (kZirve - kGece) * zirve(18.0, 1.9);
+    }
+    return 1.0;
+}
+
+double World::hourOfDay() const noexcept {
+    double h = config_.startHour + time_ / 3600.0;
+    while (h >= 24.0) { h -= 24.0; }
+    while (h < 0.0) { h += 24.0; }
+    return h;
+}
+
+double World::nextSpawnInterval() const noexcept {
+    // Yogunluk arttikca uretim araligi kisalir.
+    return config_.spawnInterval / std::max(0.05, demandMultiplier());
+}
+
 
 Intersection& World::intersection(JunctionId j) { return intersections_[j.value]; }
 
@@ -332,6 +377,27 @@ void World::detectCollisions() {
             metrics_.minGapSeen = std::min(metrics_.minGapSeen, mesafe);
             if (mesafe < kVehicleLength) {
                 ++metrics_.collisions;
+            }
+        }
+    }
+}
+
+void World::updateJunctionOccupancy() {
+    // "Kavsak ici" = kavsaga GIRIS seridinin sonunda olan araclar. Bunlar
+    // kavsak tirisiminde (crossing) sayilir. 2 fazli karsilikli kavsakta
+    // karsi eksenler ayni anda yesil olmadigi icin tikanma bu olcum
+    // yalnizca DOLULUK gostergesidir (capraz carpisma bu modelde yoktur).
+    std::fill(junctionOccupancy_.begin(), junctionOccupancy_.end(), 0);
+    for (const Vehicle& v : vehicles_) {
+        const JunctionId j = junctionOf(v);
+        if (hasSignalAt(j)) {
+            const Lane& lane = network_.lane(v.currentLane);
+            const double kalan = lane.length - v.position;
+            // Seritin son %25'inde = kavsaga giris bolgesi
+            if (lane.length <= 0.0 || kalan < 0.25 * lane.length) {
+                ++junctionOccupancy_[j.value];
+                metrics_.maxJunctionLoad =
+                    std::max(metrics_.maxJunctionLoad, junctionOccupancy_[j.value]);
             }
         }
     }
@@ -487,6 +553,7 @@ void World::stepVehicles(double dt) {
         stepSignals(h);
         applyCarFollowing(h);
         integrateSubStep(h);   // kisit hareketin icinde uygulanir
+        updateJunctionOccupancy();
     }
 }
 

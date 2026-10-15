@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <cmath>
 #include <optional>
 #include <type_traits>
 #include <vector>
@@ -553,4 +554,119 @@ TEST_CASE("Ayni tohum ile arac etkilesimi tekrarlanabilir") {
     };
     CHECK_EQ(kosu(1234), kosu(1234));
     CHECK_NE(kosu(1234), kosu(5678));
+}
+
+// ---------------------------------------------------------------------------
+// Faz 3c: kavsak dolulugu, talep profilleri, kosu tamamlanmasi
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Kavsak dolulugu olculur") {
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(30);
+    cfg.spawnInterval = 0.5;
+    World w{net, cfg, 4711};
+    for (int i = 0; i < 300 && !w.finished(); ++i) {
+        w.step();
+    }
+    CHECK_GE(w.metrics().maxJunctionLoad, 0);
+    // 2 fazli karsilikli kavsakta karsi eksenler ayni anda yesil olmadigi icin
+    // tikanma olcum uzerinden anlasilir, doluluk yalnizca gostergedir.
+}
+
+TEST_CASE("Sabit profil sabit aralik verir") {
+    for (double h = 0.0; h < 24.0; h += 0.5) {
+        CHECK_EQ(tsc::demandMultiplier(tsc::DemandProfile::Uniform, h), 1.0);
+    }
+}
+
+TEST_CASE("Sabah zirvesi saat 08:00'de en yuksek") {
+    const auto p = tsc::DemandProfile::MorningPeak;
+    CHECK_GT(tsc::demandMultiplier(p, 8.0), tsc::demandMultiplier(p, 13.0));
+    CHECK_GT(tsc::demandMultiplier(p, 8.0), tsc::demandMultiplier(p, 2.0));
+    CHECK_GT(tsc::demandMultiplier(p, 8.0), tsc::demandMultiplier(p, 20.0));
+}
+
+TEST_CASE("Aksam zirvesi saat 18:00'de en yuksek") {
+    const auto p = tsc::DemandProfile::EveningPeak;
+    CHECK_GT(tsc::demandMultiplier(p, 18.0), tsc::demandMultiplier(p, 8.0));
+    CHECK_GT(tsc::demandMultiplier(p, 18.0), tsc::demandMultiplier(p, 12.0));
+}
+
+TEST_CASE("Yogunluk carpani asla sifir olmaz - simulasyon donmez") {
+    for (int pr = 0; pr <= 2; ++pr) {
+        const auto p = static_cast<tsc::DemandProfile>(pr);
+        for (double h = 0.0; h < 24.0; h += 0.25) {
+            CHECK_GT(tsc::demandMultiplier(p, h), 0.05);
+            CHECK_LE(tsc::demandMultiplier(p, h), 2.0);
+        }
+    }
+}
+
+TEST_CASE("Yogunluk carpani araligi olcekek belirler") {
+    // TASARIM: zirve noktasinda carpan 1.0'dir, yani zirvede aralik TAM
+    // spawnInterval'dir; gece carpan 0.25 oldugu icin aralik 4 katina cikar.
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(5);   // spawnInterval = 1.0
+    cfg.profile = tsc::DemandProfile::Uniform;
+    World duz{net, cfg, 1};
+    CHECK_EQ(duz.nextSpawnInterval(), cfg.spawnInterval);
+
+    cfg.profile = tsc::DemandProfile::MorningPeak;
+    cfg.startHour = 8.0;   // zirve: carpan 2.0 -> aralik yariya iner
+    World zirve{net, cfg, 1};
+    CHECK_LT(zirve.nextSpawnInterval(), cfg.spawnInterval);
+    CHECK_LT(std::abs(zirve.nextSpawnInterval() - cfg.spawnInterval * 0.5), 0.05);
+
+    cfg.startHour = 23.0;  // gece: carpan 0.30 -> aralik ~3.3 katina cikar
+    World gece{net, cfg, 1};
+    CHECK_GT(gece.nextSpawnInterval(), zirve.nextSpawnInterval());
+    CHECK_LT(std::abs(gece.nextSpawnInterval() - cfg.spawnInterval / 0.30), 0.05);
+}
+
+TEST_CASE("Saat 24 saatlik donguyu takip eder") {
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(2);
+    cfg.startHour = 22.0;
+    World w{net, cfg, 1};
+    CHECK_EQ(w.hourOfDay(), 22.0);
+    for (int i = 0; i < 3; ++i) {
+        w.step();   // 1 saat = 3600 adim
+    }
+    for (int i = 0; i < 3597; ++i) {
+        w.step();
+    }
+    CHECK_GE(w.hourOfDay(), 0.0);
+    CHECK_LT(w.hourOfDay(), 24.0);
+}
+
+TEST_CASE("Sabah zirvesinde ayni surede daha cok arac dogar") {
+    // Arac sayisi sabit (rapor: "sabit sayida arac uretilir"); degisen sey
+    // VARIS ZAMANI DAGILIMIDIR. Bu yuzden yeterli sure verilip hepsinin
+    // dogmasi engellenir.
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(200);
+    cfg.spawnInterval = 4.0;
+
+    cfg.profile = tsc::DemandProfile::Uniform;
+    cfg.startHour = 14.0;                 // orta seviye
+    World duz{net, cfg, 8};
+    for (int i = 0; i < 100; ++i) { duz.step(); }
+    const int duzDogan = duz.metrics().spawned;
+
+    cfg.profile = tsc::DemandProfile::MorningPeak;
+    cfg.startHour = 7.5;                  // zirveye yakin
+    World zirve{net, cfg, 8};
+    for (int i = 0; i < 100; ++i) { zirve.step(); }
+    const int zirveDogan = zirve.metrics().spawned;
+
+    CHECK_LT(duzDogan, 200);              // ikisi de tamamlamadi
+    CHECK_GT(zirveDogan, duzDogan);
+}
+
+TEST_CASE("complete() yalnizca temiz kosuda true") {
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(6), 3};
+    // Zaman asimina ugratilmis bir kosu tamamlanmis sayilmaz
+    for (int i = 0; i < 10; ++i) { w.step(); }
+    CHECK_FALSE(w.complete());   // henuz bitmedi
 }

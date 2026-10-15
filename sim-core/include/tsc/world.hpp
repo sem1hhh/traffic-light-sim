@@ -49,6 +49,28 @@ struct Vehicle {
 };
 
 // ---------------------------------------------------------------------------
+// Talep profilleri
+//
+// Rapor: "Hazir profiller (sabah, aksam) araclarin varis zamani dagilimini
+// belirler; sabit sayida arac uretilir."
+//
+// Profil ARAC SAYISINI degil, varis ARALIGINI degistirir. Gece yavas,
+// sabah 08:00 ve aksam 18:00 civarinda yogunluk artar.
+// ---------------------------------------------------------------------------
+enum class DemandProfile : std::uint8_t {
+    Uniform = 0,      ///< sabit aralik (testler ve karsilastirmalar icin)
+    MorningPeak = 1,  ///< sabah zirvesi
+    EveningPeak = 2,  ///< aksam zirvesi
+};
+
+const char* toString(DemandProfile p) noexcept;
+
+/// Saat 0-23 arasindaki saate gore varis yogunlugu carpani.
+/// 1.0 = ortalama, kucuk = seyrek. Gece asla sifir DEGILDIR (simulasyon
+/// donmasin).
+double demandMultiplier(DemandProfile profile, double hourOfDay);
+
+// ---------------------------------------------------------------------------
 // Olcumler
 //
 // Faz 4'te genisletilecek. Simdilik tekrarlanabilirlik testi icin yeterli:
@@ -73,6 +95,7 @@ struct Metrics {
     int stalledSteps = 0;    ///< arac hareketi olmadan gecen ardisik adim
     int stalledEvents = 0;   ///< tespit edilen tikanma olaylarinin sayisi
     int collisions = 0;      ///< tespit edilen carpisma sayisi (K1: daima 0)
+    int maxJunctionLoad = 0;  ///< gozlenen en yuksek kavsak dolulugu
     double minGapSeen = 1.0e9;  ///< gozlenen en kucuk araclar arasi mesafe
 
     double averageTravelTime() const noexcept {
@@ -113,6 +136,9 @@ struct WorldConfig {
     /// Kavsak icinde ayni anda bulunabilecek azami arac sayisi.
     /// Faz 3c: kavsak tıkanmasini (gridlock) onlemek icin.
     int junctionCapacity = 4;
+
+    DemandProfile profile = DemandProfile::Uniform;
+    double startHour = 8.0;        ///< simulasyonun basladigi saat (0-23)
 };
 
 // ---------------------------------------------------------------------------
@@ -186,6 +212,20 @@ public:
     /// Tikanma tespit edildi mi? Kullaniciya ve rapora bildirilir.
     bool deadlocked() const noexcept { return metrics_.stalledEvents > 0; }
 
+    /// KOSU BASARIYLA TAMAMLANDI MI?
+    /// Rapor: kavakta tikanma olursa zaman asimi uygulanir ve kosu
+    /// "tamamlanamadi" olarak isaretlenir.
+    bool complete() const noexcept { return finished() && !timedOut() && !deadlocked(); }
+
+    /// Simülasyonun icinde bulundugu saat (0-23).
+    double hourOfDay() const noexcept;
+
+    /// Su anki varis yogunlugu carpani.
+    double demandMultiplier() const noexcept { return tsc::demandMultiplier(config_.profile, hourOfDay()); }
+
+    /// Bir sonraki aracin uretilme suresi (mevcut yogunluga gore).
+    double nextSpawnInterval() const noexcept;
+
     /// Tum durumu (araclar, zaman, RNG) bir 64-bit ozetine indirger.
     /// Iki kosu ayni tohumla ayni ozet vermelidir -> tekrarlanabilirlik kaniti.
     std::uint64_t digest() const;
@@ -214,6 +254,8 @@ private:
     /// Sinyal faz makinesini ilerletir. Sinyaller donmus kalirsa hicbir
     /// arac kavsahta giremez; bu yuzden her adimda cagrilir.
     void stepSignals(double dt);
+    /// Kavsak dolulugunu gunceller (kavsaga giris bolgesindeki arac sayisi).
+    void updateJunctionOccupancy();
     /// K1 olcumu: ayni seritte araclar arasi mesafe arac boyundan kucukse carpisma.
     void detectCollisions();
     /// K1'in GARANTISI: hicbir arac digerinin uzerinden gecemez.
