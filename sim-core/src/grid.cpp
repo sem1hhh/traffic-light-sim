@@ -172,6 +172,15 @@ bool Grid::isConnected() const noexcept {
     return reachableFrom(firstOccupied()) == totalOccupied();
 }
 
+int Grid::armCount(const Vec2i& c) const noexcept { return popcount4(connectivityMask(c)); }
+
+bool Grid::isPassThrough(const Vec2i& c) const noexcept {
+    if (at(c) == CellType::Empty) {
+        return false;
+    }
+    return armCount(c) == 2;
+}
+
 bool Grid::isValidJunction(const Vec2i& c) const noexcept {
     if (at(c) != CellType::Junction) {
         return false;
@@ -180,14 +189,15 @@ bool Grid::isValidJunction(const Vec2i& c) const noexcept {
     const std::uint8_t mask = junctionArms(c);
     const int kollar = popcount4(mask);
 
-    // 0 kol: kolsuz. 1 kol: cikmaz. Ikisi de trafik acisindan anlamsiz.
-    if (kollar < 2) {
+    // TEK KURAL: kavsak olmak icin en az 3 kol gerekir. 2 kollu hucre
+    // (duz yol ya da kose) yalnizca baglanti noktasidir; network.cpp de
+    // ayni esigi kullanir.
+    if (kollar < 3) {
         return false;
     }
 
-    // Dort yollu kavsakta capraz (elmas) yol varsa gecersiz: kavsak tasiyor.
-    // NOT: Tek bir capraz komsu gecersiz degildir - o durum sadece bir kose
-    // donusudur ve T kavsak gibi gecerlidir.
+    // Dort yollu kavsakta capraz (elmas) yol varsa gecersiz: kavsak tasimaktadir.
+    // NOT: tek capraz komsu gecersiz degildir; o durum bir kose donusudur.
     if (kollar == 4) {
         const bool caprazSolUst = isRoadOrJunction(c + dirOffset(Dir::North) + dirOffset(Dir::West));
         const bool caprazSagAlt = isRoadOrJunction(c + dirOffset(Dir::South) + dirOffset(Dir::East));

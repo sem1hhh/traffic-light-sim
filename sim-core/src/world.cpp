@@ -94,25 +94,92 @@ void World::step() {
     }
     stepVehicles(kStepSeconds);
     maybeSpawn();
+    updateStallState();
     time_ += kStepSeconds;
 }
 
 void World::maybeSpawn() {
-    while (metrics_.spawned < config_.vehicleCount) {
+    // Uretim ZAMANA YAYILIR: spawnInterval kadar saniye arayla bir arac.
+    // (Eskiden hepsi ilk adimda doguyordu; bu, talep profilini anlamsiz
+    // kiliyordu.)
+    while (metrics_.spawned < config_.vehicleCount && time_ >= nextSpawnTime_) {
         const std::vector<LaneId>& entries = network_.boundaryLanes();
         const std::vector<LaneId>& exits = network_.exitLanes();
         if (entries.empty() || exits.empty()) {
-            return;  // agda giris/cikis yok: daha fazla uretem
+            nextSpawnTime_ = time_ + config_.spawnInterval;
+            return;  // agda giris/cikis yok
         }
 
         const LaneId entry = entries[spawnRng_.below(static_cast<std::uint32_t>(entries.size()))];
         const LaneId exit = exits[spawnRng_.below(static_cast<std::uint32_t>(exits.size()))];
 
         // Ulasilamayan cift uretilmesin (IG-1). Cifti atla, sonrakini dene.
+        // Not: dongunun sonlanmasi validateNetwork'in "her giristen en az bir
+        // cikisa ulasilir" garantisine dayanir. Bu ciftler sirasiyla
+        // denendigi icin, ulasilabilir bir cift varsa dongu eninde sonlanir.
         if (!network_.canReach(entry, exit)) {
             continue;
         }
         spawnVehicle(entry, exit);
+        nextSpawnTime_ += config_.spawnInterval;
+    }
+}
+
+/// Arac hareket ediyor mu? Hareketsizlik tikanma tespitinin girdisidir.
+std::uint64_t World::motionFingerprint() const {
+    std::uint64_t h = kFnvOffset;
+    for (const Vehicle& v : vehicles_) {
+        hashU64(h, v.currentLane.value);
+        hashDouble(h, v.position);
+        hashU64(h, static_cast<std::uint64_t>(v.speed));
+    }
+    return h;
+}
+
+/// Hareketsizlik ve rota tutarsizligini TESPIT EDER (sessizce beklemez).
+void World::updateStallState() {
+    int hareketsiz = 0;
+    for (const Vehicle& v : vehicles_) {
+        if (v.speed <= 0.0) {
+            ++hareketsiz;
+        }
+    }
+    metrics_.stalledNow = hareketsiz;
+    metrics_.maxStalled = std::max(metrics_.maxStalled, hareketsiz);
+
+    // "Ilerleme yok" tespiti: arac sayisi azalsa da olsa, hicbir aracin
+    // konumu degismediginde sayac artar. Yalnizca "hepsi durdu" demek
+    // yetersizdir; bir ara takilip digerleri ilerliyorsa da ilerleme vardir.
+    const std::uint64_t parmak = motionFingerprint();
+    const bool ilerlemeVar = (parmak != lastMotionFingerprint_);
+    lastMotionFingerprint_ = parmak;
+
+    if (hareketsiz == 0 && ilerlemeVar) {
+        metrics_.stalledSteps = 0;
+        lastStall_ = StallReason::None;
+        return;
+    }
+
+    if (ilerlemeVar) {
+        metrics_.stalledSteps = 0;
+    } else if (!vehicles_.empty()) {
+        ++metrics_.stalledSteps;
+    }
+
+    // Rota tukendi ama arac hedef seritte degilse (tutarsiz rota).
+    for (const Vehicle& v : vehicles_) {
+        if (v.currentLane != v.exitLane && v.routeIndex + 1 >= v.route.size()) {
+            lastStall_ = StallReason::RouteMismatch;
+            ++metrics_.stalledEvents;
+            return;
+        }
+    }
+
+    // Uzerinde esik degeri gecen sure hareketsiz kaldik: tikanma olayi.
+    if (metrics_.stalledSteps >= kStallStepThreshold) {
+        lastStall_ = StallReason::NoProgress;
+        ++metrics_.stalledEvents;
+        metrics_.stalledSteps = 0;  // olay sayaci tekrar tekrar artmasin
     }
 }
 
@@ -124,7 +191,8 @@ World::AdvanceResult World::advanceLane(Vehicle& v) {
         v.position = 0.0;
         return AdvanceResult::Moved;
     }
-    // Rota bitti ama hedef seritte degilsek: tutarli degil, arac takilir.
+    // Rota bitti ama hedef seritte degilsek: tutarsiz rota.
+    // Sessizce donmek yerine TESPIT EDILIR (updateStallState).
     if (v.currentLane == v.exitLane) {
         return AdvanceResult::Arrived;
     }

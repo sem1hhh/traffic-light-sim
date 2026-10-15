@@ -132,10 +132,26 @@ public:
     /// T kavsak = 3 koll, dort yollu = 4 koll.
     std::uint8_t junctionArms(const Vec2i& c) const noexcept;
 
-    /// Bu hucre kavsak mi ve kollari gecerli mi?
-    /// Gecerli: en az 2 kol. Dort yollu kavsakta capraz (elmas) yol varsa gecersiz.
-    /// Gecersiz ornekler: kolsuz hucre, tek kollu cikmaz, elmas tasiyan dort yollu kavsak.
+    /// Kac kola sahip? (0..4) Hem kavsak hem gecis noktasi kurali bunu kullanir.
+    int armCount(const Vec2i& c) const noexcept;
+
+    /// Bu hucre SINEYLI bir kavsak mi?
+    ///
+    /// Tek kural: bir hucre ancak ve ancak 3 veya daha fazla kola sahipse
+    /// kavsaktir. Bu kural network.cpp'deki siniflandirmayla AYNI kuraldir;
+    /// iki yerde farkli sayi kullanilmaz.
+    ///
+    ///   0-1 koll  -> gecersiz (kolsuz / cikmaz)
+    ///   2 kol     -> GECIS NOKTASI: duz yol ya da kose. Sinyali yoktur,
+    ///                cakismasi yoktur. Junction tipinde isaretlenmis olsa
+    ///                bile kavsak sayilmaz; editorde "Road" olmalidir.
+    ///   3-4 koll  -> kavsak. Dört yollu kavsakta capraz (elmas) yol varsa
+    ///                gecersiz: kavsak tasimaktadir.
     bool isValidJunction(const Vec2i& c) const noexcept;
+
+    /// Bu hucre yalnizca baglanti noktasi mi? (2 kol)
+    /// Yol kesintisiz devam eder, sinyal ve karar noktasi yoktur.
+    bool isPassThrough(const Vec2i& c) const noexcept;
 
     // --- Serilestirme ------------------------------------------------------
     std::vector<CellType>& raw() noexcept { return cells_; }

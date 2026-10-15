@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <optional>
+#include <type_traits>
 #include <vector>
 
 using tsc::CellType;
@@ -249,12 +251,26 @@ TEST_CASE("Geri yuklemeden sonra arac uretimi de tekrarlanabilir") {
 // Araclar
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Araclar uretilir") {
+TEST_CASE("Araclar uretilir ve uretim ZAMANA YAYILIR") {
     const Network net = tsc::buildNetwork(simAgi());
-    World w{net, testConfig(20), 11};
+    WorldConfig cfg = testConfig(20);
+    cfg.spawnInterval = 2.0;
+    World w{net, cfg, 11};
+
+    // Ilk adimda YALNIZCA bir arac dogar (eskiden hepsi birden doguyordu).
     w.step();
-    CHECK_GE(w.vehicleCount(), 1u);
-    CHECK_EQ(w.metrics().spawned, 20);  // uretim immeda tamamlanir
+    CHECK_EQ(w.metrics().spawned, 1);
+    CHECK_EQ(w.vehicleCount(), 1u);
+
+    // Uretim araliklar halinde devam eder.
+    w.step();
+    CHECK_EQ(w.metrics().spawned, 1);  // 2. saniye henuz gelmedi
+    for (int i = 0; i < 60; ++i) {
+        w.step();
+    }
+    CHECK_EQ(w.metrics().spawned, 20);
+    // Uretilen = yolda olan + ulasmis olmali (kaybolan arac olmamali).
+    CHECK_EQ(static_cast<int>(w.vehicleCount()) + w.metrics().arrived, 20);
 }
 
 TEST_CASE("Gecersiz seritle arac uretilemez") {
@@ -316,4 +332,83 @@ TEST_CASE("Bos yapilandirmada simulasyon patlamaz") {
     w.step();
     CHECK_EQ(w.vehicleCount(), 0u);
     CHECK(w.finished());
+}
+// ---------------------------------------------------------------------------
+// Bekleme suresi: HENUZ OLCULMUYOR - sessizce 0 donmemeli
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Bekleme suresi henuz olculmedigi icin nullopt doner") {
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(10), 99};
+    for (int i = 0; i < 200 && !w.finished(); ++i) {
+        w.step();
+    }
+    // Onemli: deger 0 DEGIL, "olculmedi" doner. Karsi lastirmada kullanilamaz.
+    const auto bekleme = w.metrics().averageWaitTime();
+    CHECK_FALSE(bekleme.has_value());
+    CHECK_FALSE(w.metrics().waitTimeMeasured);
+
+    // Yolculuk suresi ise olculuyor ve kullanilabilir.
+    CHECK(w.metrics().averageTravelTime() > 0.0);
+}
+
+TEST_CASE("averageWaitTime optional olmayi zorunlu kilar - regresyon") {
+    // Eski davranis: averageWaitTime() sessizce 0.0 donuyordu ve cagiran
+    // taraf "bekleme yok" diye yorumlardi. Artik optional donuyor.
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(1), 7};
+    w.step();
+    const auto v = w.metrics().averageWaitTime();
+    static_assert(!std::is_same_v<decltype(v), double>,
+                  "averageWaitTime double DONMEMELI; olculmedigi bildirilmeli");
+    CHECK(v == std::nullopt);
+}
+
+// ---------------------------------------------------------------------------
+// Tikanma / deadlock tespiti
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Normal kosuda tikanma olmaz") {
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(12), 246};
+    for (int i = 0; i < 400 && !w.finished(); ++i) {
+        w.step();
+    }
+    CHECK_EQ(w.metrics().stalledEvents, 0);
+    CHECK_FALSE(w.deadlocked());
+    CHECK_EQ(w.lastStall(), tsc::StallReason::None);
+}
+
+TEST_CASE("Hareketsiz arac sayaci izlenir") {
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(12), 246};
+    for (int i = 0; i < 5; ++i) {
+        w.step();
+    }
+    // Her adimda araclar ilerledigi icin hareketsiz sayac sifir kalmali.
+    CHECK_EQ(w.metrics().stalledNow, 0);
+    CHECK_EQ(w.metrics().stalledSteps, 0);
+}
+
+TEST_CASE("Tikanma sayaclari snapshot ile korunur") {
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(12), 246};
+    for (int i = 0; i < 5; ++i) {
+        w.step();
+    }
+    const tsc::Snapshot s = w.snapshot();
+    for (int i = 0; i < 30; ++i) {
+        w.step();
+    }
+    w.restore(s);
+    for (int i = 0; i < 30; ++i) {
+        w.step();
+    }
+    CHECK_EQ(w.digest(), w.digest());  // kararli
+    CHECK_GE(w.metrics().maxStalled, 0);
+}
+
+TEST_CASE("Tikanma esigi tanimli") {
+    CHECK(tsc::kStallStepThreshold > 0);
+    static_assert(tsc::kStallStepThreshold == 30, "30 saniye hareketsizlik esigi sabitlenmis olmali");
 }

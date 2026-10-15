@@ -5,6 +5,7 @@
 #include "tsc/types.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,16 +49,42 @@ struct Metrics {
     int spawned = 0;
     int arrived = 0;
     double totalTravelTime = 0.0;   ///< ulasilan araclarin toplam yolculuk suresi (s)
+
+    // --- Bekleme suresi: HENUZ OLCULMUYOR ---------------------------------
+    // Bekleme suresi kavsak kontrolu eklenmeden (Faz 2/3) hesaplanamaz.
+    // Alan burada dursa bile deger 0 kalir ve "bekleme yok" sanilabilir.
+    // Bu yuzden erisim optional doner: olcum yoksa nullopt verir, cagiran
+    // taraf derleyici seviyesinde uyarilir. Sessizce 0'a dönmez.
     double totalWaitTime = 0.0;
-    int maxQueue = 0;
+    bool waitTimeMeasured = false;
+
+    // --- Tikanma (stall / deadlock) ----------------------------------------
+    int stalledNow = 0;      ///< su an hareketsiz duran arac sayisi
+    int maxStalled = 0;      ///< kosu boyunca gorulen en yuksek deger
+    int stalledSteps = 0;    ///< arac hareketi olmadan gecen ardisik adim
+    int stalledEvents = 0;   ///< tespit edilen tikanma olaylarinin sayisi
 
     double averageTravelTime() const noexcept {
         return arrived > 0 ? totalTravelTime / static_cast<double>(arrived) : 0.0;
     }
-    double averageWaitTime() const noexcept {
-        return arrived > 0 ? totalWaitTime / static_cast<double>(arrived) : 0.0;
+
+    /// Bekleme suresi olculmediyse nullopt doner. (Faz 2/3'te uygulanir.)
+    std::optional<double> averageWaitTime() const noexcept {
+        if (!waitTimeMeasured) {
+            return std::nullopt;
+        }
+        if (arrived == 0) {
+            return std::optional<double>{0.0};
+        }
+        return std::optional<double>{totalWaitTime / static_cast<double>(arrived)};
     }
 };
+
+/// Bir aracin rotasi tukendigi halde hedef seritte degilse, ya da uzun
+/// sure hareketsiz kaldiginda tespit edilir. Sessizce donmak yoktur.
+constexpr int kStallStepThreshold = 30;  // 30 saniye hareketsizlik = tikanma
+
+enum class StallReason : std::uint8_t { None = 0, RouteMismatch, NoProgress };
 
 // ---------------------------------------------------------------------------
 // Dunya yapilandirmasi
@@ -121,6 +148,12 @@ public:
 
     const Metrics& metrics() const noexcept { return metrics_; }
 
+    /// Bir aracin neden takildigi (StallReason) - None degilse.
+    StallReason lastStall() const noexcept { return lastStall_; }
+
+    /// Tikanma tespit edildi mi? Kullaniciya ve rapora bildirilir.
+    bool deadlocked() const noexcept { return metrics_.stalledEvents > 0; }
+
     /// Tum durumu (araclar, zaman, RNG) bir 64-bit ozetine indirger.
     /// Iki kosu ayni tohumla ayni ozet vermelidir -> tekrarlanabilirlik kaniti.
     std::uint64_t digest() const;
@@ -136,6 +169,9 @@ private:
     enum class AdvanceResult { Moved, Arrived, Stuck };
     AdvanceResult advanceLane(Vehicle& v);
     void maybeSpawn();
+    /// Hareketsizlik ve rota tutarsizligini tespit eder.
+    void updateStallState();
+    std::uint64_t motionFingerprint() const;
 
     Network network_;
     WorldConfig config_{};
@@ -153,6 +189,9 @@ private:
     Rng driveRng_;
     int spawnCursor_ = 0;
     std::uint32_t nextVehicleCounter_ = 0;
+    StallReason lastStall_ = StallReason::None;
+    std::uint64_t lastMotionFingerprint_ = 0;
+    double nextSpawnTime_ = 0.0;
 };
 
 }  // namespace tsc

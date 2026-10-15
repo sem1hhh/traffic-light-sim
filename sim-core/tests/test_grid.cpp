@@ -255,15 +255,46 @@ TEST_CASE("Tek kollu cikmaz kavsak gecersizdir") {
     CHECK_FALSE(g.isValidJunction(Vec2i{2, 2}));
 }
 
-TEST_CASE("Kose donusu gecerlidir - tek capraz komsu gecersiz degildir") {
-    // Yalnizca W ve N kollari + kose caprazi (NW). Bu bir kose donusudur,
-    // T kavsak gibi gecerli bir kavsaktir.
+TEST_CASE("Uc kollu kavsak + tek capraz komsu gecerlidir") {
+    // W, N, S kollari + NW caprazi. TEK capraz komsu gecersiz degildir;
+    // gecersiz olan durum dort yolluda IKI caprazin birlikte bulunmasidir.
     Grid g{GridSize{7, 7}};
     g.set(Vec2i{3, 3}, CellType::Junction);
-    g.set(Vec2i{2, 3}, CellType::Road);  // West kolu
-    g.set(Vec2i{3, 2}, CellType::Road);  // North kolu
+    g.set(Vec2i{2, 3}, CellType::Road);  // West
+    g.set(Vec2i{3, 2}, CellType::Road);  // North
+    g.set(Vec2i{3, 4}, CellType::Road);  // South
     g.set(Vec2i{2, 2}, CellType::Road);  // NW caprazi
     CHECK(g.isValidJunction(Vec2i{3, 3}));
+}
+
+TEST_CASE("Iki kollu hucre KAVSAK DEGILDIR - gecis noktasidir") {
+    // W ve N kollari: duz yol degil, kose. Junction tipinde isaretlenmis
+    // olsa bile sinyal tasimaz. Tek kural: kavsak icin 3+ kol gerekir.
+    Grid g{GridSize{7, 7}};
+    g.set(Vec2i{3, 3}, CellType::Junction);
+    g.set(Vec2i{2, 3}, CellType::Road);
+    g.set(Vec2i{3, 2}, CellType::Road);
+
+    CHECK_EQ(g.armCount(Vec2i{3, 3}), 2);
+    CHECK_FALSE(g.isValidJunction(Vec2i{3, 3}));
+    CHECK(g.isPassThrough(Vec2i{3, 3}));
+}
+
+TEST_CASE("armCount ve isPassThrough kollari sayar") {
+    Grid g{GridSize{5, 5}};
+    g.set(Vec2i{2, 2}, CellType::Junction);
+    CHECK_EQ(g.armCount(Vec2i{2, 2}), 0);
+    CHECK_FALSE(g.isPassThrough(Vec2i{2, 2}));
+
+    g.set(Vec2i{2, 1}, CellType::Road);
+    g.set(Vec2i{1, 2}, CellType::Road);
+    CHECK_EQ(g.armCount(Vec2i{2, 2}), 2);
+    CHECK(g.isPassThrough(Vec2i{2, 2}));
+
+    g.set(Vec2i{2, 3}, CellType::Road);
+    CHECK_EQ(g.armCount(Vec2i{2, 2}), 3);
+    CHECK_FALSE(g.isPassThrough(Vec2i{2, 2}));  // artik gecis degil, kavsak
+    CHECK(g.isValidJunction(Vec2i{2, 2}));
 }
 
 TEST_CASE("Elmas tasiyan dort yollu kavsak gecersizdir") {
@@ -300,13 +331,35 @@ TEST_CASE("Kavsak Izgara disinda gecersiz") {
     CHECK_FALSE(g.isValidJunction(Vec2i{-1, 0}));
 }
 
-TEST_CASE("Izgara kenarindaki kavsak - kollari eksik olabilir ama gecerlidir") {
+TEST_CASE("Izgara kenarindaki uc kollu kavsak gecerlidir") {
+    // Kenar hucresi, North komsusu izgara disinda kalan T kavsak.
+    // (Kose hucre (0,0) 3 kol YAPAMAZ: N ve W daima disarida.)
+    Grid g{GridSize{4, 4}};
+    g.set(Vec2i{1, 0}, CellType::Junction);
+    g.set(Vec2i{0, 0}, CellType::Road);  // West
+    g.set(Vec2i{2, 0}, CellType::Road);  // East
+    g.set(Vec2i{1, 1}, CellType::Road);  // South
+
+    CHECK_EQ(g.armCount(Vec2i{1, 0}), 3);
+    CHECK(g.isValidJunction(Vec2i{1, 0}));
+}
+
+TEST_CASE("Kose hucre hicbir zaman uc kollu olamaz") {
+    Grid g{GridSize{4, 4}};
+    g.set(Vec2i{0, 0}, CellType::Junction);
+    g.set(Vec2i{1, 0}, CellType::Road);
+    g.set(Vec2i{0, 1}, CellType::Road);
+    CHECK(g.armCount(Vec2i{0, 0}) <= 2);
+}
+
+TEST_CASE("Izgara kenarindaki iki kollu hucre gecis noktasidir") {
     Grid g{GridSize{4, 4}};
     g.set(Vec2i{0, 0}, CellType::Junction);
     g.set(Vec2i{1, 0}, CellType::Road);  // East
     g.set(Vec2i{0, 1}, CellType::Road);  // South
-    // North ve West komsulari izgara disinda
-    CHECK(g.isValidJunction(Vec2i{0, 0}));
+    // 2 kol -> kavsak degil, sinyal tasimaz
+    CHECK_FALSE(g.isValidJunction(Vec2i{0, 0}));
+    CHECK(g.isPassThrough(Vec2i{0, 0}));
     CHECK_EQ(g.junctionArms(Vec2i{0, 0}), bit(Dir::East) | bit(Dir::South));
 }
 
