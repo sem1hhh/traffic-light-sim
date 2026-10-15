@@ -113,8 +113,22 @@ struct Metrics {
     double queueSum = 0.0;
     /// Gözlenen en yüksek tekil kuyruk uzunluğu.
     int maxQueue = 0;
-    /// Son ölçümdeki kollara göre kuyruk (RL durumu için).
-    std::array<int, kDirCount> approachQueue{};
+    /// SON ölçümdeki toplam kuyruk. approachQueues satirlarinin toplamina
+    /// ESIT olmasi gerekir (degerler kaybolmamalı). maxQueue ile karistirma:
+    /// maxQueue zaman icindeki en buyuk degerdir.
+    int lastQueue = 0;
+    /// KAVSAK BASINA kollara gore kuyruk. Dizilim sirasi
+    /// Network::signalJunctions() ile aynidir; ic dizilim sirasi
+    /// Dir enum sirasiyla aynidir: [North, East, South, West].
+    ///
+    /// Bu alan Intersection'a yazilan degerlerin AYNI kopyasidir; kontrolcu
+    /// icin gecerli olan buradaki degil, observe() ciktisidir. Amaci test
+    /// ve raporlama icin bagimsiz bir kayit tutmaktir.
+    ///
+    /// (Ilk kosuda bu alan TEK bir kavsagin kuyruguydu ve "son olcum" adi
+    /// tasimiyordu. Eksen basina degil, KAVSAK basina tutulmasi gerekiyor:
+    /// aksi halde uc kavsagin da kuyrugu birebir ayni cikiyor.)
+    std::vector<std::array<int, kDirCount>> approachQueues;
 
     double averageTravelTime() const noexcept {
         return arrived > 0 ? totalTravelTime / static_cast<double>(arrived) : 0.0;
@@ -267,6 +281,7 @@ public:
 
     const Metrics& metrics() const noexcept { return metrics_; }
     const WorldConfig& config() const noexcept { return config_; }
+    const Network& network() const noexcept { return network_; }
 
     /// Bir aracin neden takildigi (StallReason) - None degilse.
     StallReason lastStall() const noexcept { return lastStall_; }

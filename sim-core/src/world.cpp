@@ -434,31 +434,50 @@ void World::sampleMetrics() {
     metrics_.vehicleTimeSum += static_cast<double>(vehicles_.size()) * kStepSeconds;
     metrics_.observedSeconds += kStepSeconds;
 
-    // --- Kuyruklar: pratik olarak durmus araclar, KOLLA GORE ------------
-    // Raporun RL durumu: "kavşak kollarındaki kuyruk düzeyleri".
-    std::array<int, kDirCount> kolKuyruk{};
-    int toplamKuyruk = 0;
-    for (const Vehicle& v : vehicles_) {
-        if (v.speed > kQueueSpeedThreshold) {
-            continue;
-        }
-        ++toplamKuyruk;
+    // --- Kuyruklar: pratik olarak durmus araclar -------------------------
+    //
+    // Kuyruk KAVSAK BASINA olculur, eksen basina degil. Her kavsak kendi
+    // kollarinin kuyrugunu gorur; aksi halde tum kavsaklar ayni sayilari
+    // gorur ve kontrolcu karari anlamli olmaktan cikar.
+    //
+    // (Ilk kosuda hata bu ayrim yapilmadigi icin uc kavsagin da kuyrugu
+    // birebir ayni cikiyordu: 2,9,0,8.)
+    std::vector<std::array<int, kDirCount>> kavsakKuyruk(
+        network_.signalJunctions().size(), std::array<int, kDirCount>{});
 
-        const JunctionId j = junctionOf(v);
-        if (hasSignalAt(j) && v.routeIndex + 1 < v.route.size()) {
-            const Dir yaklasma = network_.lane(v.route[v.routeIndex + 1]).entryDir;
-            ++kolKuyruk[static_cast<std::size_t>(yaklasma)];
+    int toplamKuyruk = 0;
+    std::size_t jIdx = 0;
+    for (const JunctionId j : network_.signalJunctions()) {
+        for (const Vehicle& v : vehicles_) {
+            if (v.speed > kQueueSpeedThreshold) {
+                continue;
+            }
+            if (junctionOf(v) != j) {
+                continue;
+            }
+            ++toplamKuyruk;
+            if (v.routeIndex + 1 < v.route.size()) {
+                const Dir yaklasma =
+                    network_.lane(v.route[v.routeIndex + 1]).entryDir;
+                ++kavsakKuyruk[jIdx][static_cast<std::size_t>(yaklasma)];
+            }
         }
+        ++jIdx;
     }
 
     metrics_.queueSum += static_cast<double>(toplamKuyruk);
     metrics_.maxQueue = std::max(metrics_.maxQueue, toplamKuyruk);
-    metrics_.approachQueue = kolKuyruk;
+    metrics_.lastQueue = toplamKuyruk;
 
-    for (const JunctionId jid : network_.signalJunctions()) {
+    // Her kavsagin gordugu kuyruk: Intersection'a yazilir -> kontrolcunun
+    // durumu dogrudan beslenir (RL icin).
+    jIdx = 0;
+    metrics_.approachQueues = kavsakKuyruk;
+    for (const JunctionId j : network_.signalJunctions()) {
         for (const Dir d : kAllDirs) {
-            intersections_[jid.value].setQueue(d, kolKuyruk[static_cast<std::size_t>(d)]);
+            intersections_[j.value].setQueue(d, kavsakKuyruk[jIdx][static_cast<std::size_t>(d)]);
         }
+        ++jIdx;
     }
 }
 

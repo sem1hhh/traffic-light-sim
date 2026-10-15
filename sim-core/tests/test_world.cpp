@@ -705,14 +705,23 @@ TEST_CASE("Kuyruk olcer, RL durumunu besler") {
     CHECK_GT(w.metrics().maxQueue, 0);
     CHECK_GT(w.metrics().averageQueue(), 0.0);
 
-    // Intersection'lara yazilan kuyruklar gozlemle ayni olmali.
-    const tsc::JunctionId jid = net.signalJunctions()[0];
-    const auto o = tsc::observe(w.intersection(jid));
-    CHECK_EQ(o.queues[0], w.metrics().approachQueue[0]);
-    // Kuyruk toplami = kollara gore toplam
-    int kolToplam = 0;
-    for (const int q : w.metrics().approachQueue) { kolToplam += q; }
-    CHECK_GE(kolToplam, 0);
+    // Intersection'a yazilan kuyruklar, olcum kaydiyla AYNi olmali.
+    // (Bu bir ">= 0" kontrolu DEGIL: iki ayri kod yolu ayni sayiyi uretiyor.)
+    const auto& jq = w.metrics().approachQueues;
+    CHECK_EQ(jq.size(), net.signalJunctions().size());
+    int toplam = 0;
+    for (std::size_t i = 0; i < jq.size(); ++i) {
+        const auto o = tsc::observe(w.intersection(net.signalJunctions()[i]));
+        for (std::size_t d = 0; d < tsc::kDirCount; ++d) {
+            CHECK_EQ(o.queues[d], jq[i][d]);
+            toplam += o.queues[d];
+        }
+    }
+    // Kaybolmazlik: kavsak kuyruklarinin toplami, o anki toplam kuyruga esit.
+    // (Ilk kosuda kuyruklar eksene gore toplanip TUM kavsaklara ayni sayi
+    // yaziliyordu; bu satirlar o hatayi yakalardi.)
+    CHECK_EQ(toplam, w.metrics().lastQueue);
+    CHECK_LE(w.metrics().lastQueue, w.metrics().maxQueue);
 }
 
 TEST_CASE("Kuyruk tanimi: duran arac sayilir, akan sayilmaz") {

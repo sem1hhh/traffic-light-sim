@@ -27,3 +27,5 @@ enable_testing()
 
 add_subdirectory(third_party)
 add_subdirectory(sim-core)
+add_subdirectory(controllers)
+add_subdirectory(experiments)

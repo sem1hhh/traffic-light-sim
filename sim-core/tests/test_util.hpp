@@ -16,6 +16,19 @@
 
 #include <doctest/doctest.h>
 
+#include <cmath>
+
+/// Mutlak toleransla karsilastirma. Kayan nokta testlerinde `CHECK_EQ`
+/// kullanilamaz (tam esitlik beklenmez); bu yardimci "ne kadar yaklasmali"
+/// sorusunu sorar ve BASARISIZ olursa farki yazar.
+#define CHECK_NEAR_T(a, b, tol) \
+    CHECK_MESSAGE(std::abs((a) - (b)) <= (tol),                    \
+                  #a " != " #b " fark=" << std::abs((a) - (b))     \
+                                        << " tolerans=" << (tol))
+
+/// Bagil hata ile karsilastirma (oranlarda mutlak tolerans yaniltir).
+#define CHECK_REL_T(a, b, relTol) CHECK_NEAR_T((a), (b), std::abs(b) * (relTol))
+
 /// Esitlik. Iki degeri karsilastirip bool doner.
 template <typename T>
 constexpr bool eq(const T& a, const T& b) noexcept {
