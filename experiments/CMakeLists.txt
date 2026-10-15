@@ -1,6 +1,7 @@
 add_library(tsc_experiments STATIC
     stats.cpp
     bench.cpp
+    train.cpp
 )
 
 target_include_directories(tsc_experiments PUBLIC .)
@@ -13,6 +14,14 @@ add_executable(bench bench_main.cpp)
 target_link_libraries(bench PRIVATE tsc_experiments)
 
 set_target_properties(bench PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/experiments
+)
+
+# --- train araci -----------------------------------------------------------
+add_executable(train train_main.cpp)
+target_link_libraries(train PRIVATE tsc_experiments)
+
+set_target_properties(train PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/experiments
 )
 

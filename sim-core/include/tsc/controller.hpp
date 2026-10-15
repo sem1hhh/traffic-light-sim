@@ -3,6 +3,7 @@
 #include "tsc/intersection.hpp"
 #include "tsc/types.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <iosfwd>
@@ -40,7 +41,10 @@ struct SignalObservation {
 
     SignalTiming timing{};
 
+    /// Bu kavsakta bekleyen toplam arac. Raporun odul tanimidir:
+    /// r = -(bekleyen arac sayisi).
     int totalWaiting() const noexcept;
+
     bool canSwitch() const noexcept { return state == SignalState::Green; }
 };
 
@@ -74,6 +78,19 @@ public:
 
     /// Mevcut duruma gore karar verir. STATE DEGISTIRMEZ.
     virtual Action decide(const SignalObservation& obs) = 0;
+
+    /// Bir adim sonrasi odul. Odulle ogrenen kontrolcuer (Q-learning)
+    /// icin gereklidir; peşin (greedy) kontrolculer varsayilan olarak
+    /// yok sayar.
+    ///
+    /// `executed`, GERCEKTEN UYGULANAN eylemdir. `Switch` istegi kabul
+    /// edilmediyse (minGreen, sari, cakisma...) `executed == Stay` olur.
+    /// Bu ayrim onemlidir: reddedilen bir istegi ogrenilen eylem sanmak
+    /// Q tablosunu bozar.
+    virtual void onReward(const SignalObservation& nextObs, Action executed) {
+        static_cast<void>(nextObs);
+        static_cast<void>(executed);
+    }
 
     /// Ozel durumlar icin: model kaydet/yukle (or. Q tablosu). Varsayilan bos.
     virtual void serialize(std::ostream&) const {}

@@ -45,6 +45,10 @@ public:
     /// Toplam gecis istegi sayaci (ret edilenler dahil degildir).
     std::uint64_t switchRequests() const noexcept { return switchRequests_; }
 
+    /// Odul geri bildirimi yapilan adim sayisi (odulle ogrenen kontrolcuer
+    /// icin). Bir kontrolcu odul almiyorsa bu sayac artmaz.
+    std::uint64_t rewardCallbacks() const noexcept { return rewardCallbacks_; }
+
     std::size_t controllerCount() const noexcept { return controllers_.size(); }
 
 private:
@@ -53,9 +57,17 @@ private:
         std::unique_ptr<IController> controller;
     };
 
+    /// Bir adimda alinan karar ve GERCEKTEN uygulanan eylem.
+    struct ActionDecision {
+        JunctionId junction;
+        Action executed;
+    };
+    std::vector<ActionDecision> kararlar_;
+
     World* world_;
     std::vector<Entry> controllers_;
     std::uint64_t switchRequests_ = 0;
+    std::uint64_t rewardCallbacks_ = 0;
 };
 
 }  // namespace tsc
