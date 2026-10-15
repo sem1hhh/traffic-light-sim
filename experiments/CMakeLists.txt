@@ -30,6 +30,7 @@ add_executable(run_experiment_tests
     test_main.cpp
     stats_test.cpp
     bench_test.cpp
+    train_test.cpp
 )
 target_include_directories(run_experiment_tests PRIVATE ${CMAKE_SOURCE_DIR}/sim-core/tests)
 target_link_libraries(run_experiment_tests PRIVATE tsc_experiments third_party)

@@ -1,5 +1,6 @@
 #include "q_learning.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <istream>
 #include <sstream>
@@ -50,6 +51,7 @@ void QLearningController::clearTable() {
     kStateKnown_.assign(kQStateCount, false);
     sayac_.assign(kQStateCount * kQActionCount, 0u);
     deneme_.assign(kQStateCount * kQActionCount, 0u);
+    mergeCount_ = 0;
     ziyaretli_ = 0;
 }
 
@@ -81,6 +83,31 @@ void QLearningController::setQ(std::size_t state, Action a, double v) {
     if (i < tablo.size()) {
         tablo[i] = v;
     }
+}
+
+void QLearningController::mergeFrom(const QLearningController& other) {
+    if (tablo.size() != other.tablo.size()) {
+        return;   // boyutlar uymuyor; sessizce bozma
+    }
+    // GERCEK artımlı ortalama: n tablo birlestirildiginde agirliklar esit
+    // olur. Düz `(t+o)/2` yazimi 3 tabloda 1/8, 1/4, 1/2 agirlik verir.
+    const double n = static_cast<double>(mergeCount_);
+    for (std::size_t i = 0; i < tablo.size(); ++i) {
+        tablo[i] = (tablo[i] * n + other.tablo[i]) / (n + 1.0);
+    }
+    if (kStateKnown_.size() == other.kStateKnown_.size()) {
+        for (std::size_t i = 0; i < kStateKnown_.size(); ++i) {
+            kStateKnown_[i] = kStateKnown_[i] || other.kStateKnown_[i];
+        }
+    }
+    const std::size_t sn = std::min(sayac_.size(), other.sayac_.size());
+    for (std::size_t i = 0; i < sn; ++i) {
+        sayac_[i] = std::max(sayac_[i], other.sayac_[i]);
+        deneme_[i] = std::max(deneme_[i], other.deneme_[i]);
+    }
+    gorulenler_ = other.gorulenler_;
+    ziyaretli_ = other.ziyaretli_;
+    ++mergeCount_;
 }
 
 bool QLearningController::isKnown(std::size_t state) const {

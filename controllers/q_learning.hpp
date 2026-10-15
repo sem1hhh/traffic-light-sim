@@ -183,6 +183,30 @@ public:
     void serialize(std::ostream& os) const override;
     void deserialize(std::istream& is) override;
 
+    /// Baska bir tabloyu BIRLESTIRIR (ortalama).
+    ///
+    /// Neden gerekiyor: SignalDriver her kavsaga ayri bir kontrolcu
+    /// uretir; hepsi ayni modelden baslar ama farkli trafik gordukleri
+    /// icin tablolari ayrilir (olculdu: 8 / 7 / 8 bilinen durum). Ilk
+    /// yazimda geri yazma dongusu `model = c.copy()` ile tum kavsaklari
+    /// geziyor ve her seferinde modeli EZIYORDU; yani uc kavsagin
+    /// ikisinin ogrenmesi atiliyordu.
+    ///
+    /// Ortalama yerine "ilk kavsagi al" secildi: secim yapmak ek bir
+    /// karardir ve gerekcesi zordur; ortalama secimsiz ve simetrik.
+    ///
+    /// SÖZLEŞME: bu işlev **taze bir toplayıcı** üzerinde kullanılır.
+    /// İlk çağrı tabloyu `other` ile değiştirir, sonrakiler artımlı ortalama
+    /// yapar. N sonucu N kaynağın **eşit ağırlıklı ortalaması**dır.
+    ///
+    /// DIKKAT: artımlı (running) ortalama kullanır. Düz `t = (t + o)/2`
+    /// yazımı YANLIŞTIR: c1,c2,c3 sırayla eklendiğinde ağırlıklar
+    /// 1/8, 1/4, 1/2 olur — yani "ortalama" aslında SON kavşağa ağırlık
+    /// vermekten başka bir şey değildir ve düzeltilen hata geri gelir.
+    /// (Bu hata yaşandı: ilk uygulamada `(t+o)/2` yazılmıştı.)
+    void mergeFrom(const QLearningController& other);
+
+
 private:
     /// Odul: kuyruk ne kadar buyukse o kadar kotu.
     double reward(const SignalObservation& obs) const;
@@ -208,6 +232,7 @@ private:
     std::vector<bool> kStateKnown_;   ///< her iki eylemi de degerlendirilmis mi
     std::vector<std::uint32_t> sayac_;   ///< N(s,a): kac kez DEGERLENDIRILDI
     std::vector<std::uint32_t> deneme_;  ///< kac kez DENENDI (kesif icin)
+    std::size_t mergeCount_ = 0;         ///< birlestirilen tablo sayisi
     /// (s,a) ikisinin de degerlendirilmis olup olmadigi.
     bool bilinen(std::size_t s, Action a) const {
         const std::size_t i = s * kQActionCount + static_cast<std::size_t>(a);

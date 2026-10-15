@@ -4,6 +4,7 @@
 #include "fixed_time.hpp"
 
 #include <algorithm>
+#include <vector>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -12,11 +13,6 @@
 
 namespace tsc {
 namespace bench {
-namespace {
-
-/// Degerlendirmede kullanilan tohum sayisi. Tek tohum egrinin taban
-/// gürültüsünden ayırt edilemiyordu.
-constexpr int kEvalSeeds = 5;
 
 /// Bir bolumu DONER DONDURerek calistirir ve ogrenilen tablolari modele
 /// geri yazar.
@@ -26,15 +22,13 @@ constexpr int kEvalSeeds = 5;
 /// tablonun kopyasi degistirilmez. Ilk denemede boyle yazilmisti ve
 /// 200 bolum egitimden sonra 0/2560 durum ogrenilmisti — "ogrenme calismiyor"
 /// goruntusu, oysa sonuc sadece bir nesne yasam suresi sorunu idi.
-struct EpisodeOutcome {
-    double averageTravelTime = 0.0;
-    double averageQueue = 0.0;
-    int completed = 0;
-    std::uint64_t switchRequests = 0;
-};
-
+/// `writeBack` false ise ogrenilen tablo modele YAZILMAZ. Degerlendirmede
+/// kullanilir: epsilon=0 olsa bile onReward Q'yu gunceller (olculdu: bir
+/// kosuda 594 geri bildirim, ort|Q| 0 -> 0.0039, 7 durum ogrenildi), yani
+/// yazma yapilirsa "olcduk" politikamiz degismek olurdu. Gecisin anlamini
+/// yitirmemek icin ogrenim de durdurulur.
 EpisodeOutcome runEpisode(const Scenario& scenario, QLearningController& model,
-                          std::uint64_t seed) {
+                          std::uint64_t seed, bool writeBack) {
     const Network net = buildNetwork(buildScenarioGrid(scenario));
 
     WorldConfig cfg;
@@ -62,12 +56,21 @@ EpisodeOutcome runEpisode(const Scenario& scenario, QLearningController& model,
         driver.step();
     }
 
-    // Ogrenilen tablolari modele geri yaz: her kavsagin tablosu ayni
-    // modelden kopyalandigi icin ilk kavsagin tablosu yeterlidir; yine de
-    // hepsini birlestiriyoruz (simetrik agda zaten aynilardir).
-    for (const JunctionId j : net.signalJunctions()) {
-        const auto& c = dynamic_cast<const QLearningController&>(driver.controllerAt(j));
-        model = c.copy();
+    // Ogrenilen tablolari modele geri yaz.
+    //
+    // HATA (duzeltildi): `model = c.copy()` dongusu tum kavsaklari geziyor
+    // ama her seferinde modeli EZIYORDU; sadece son kavsagin ogrenmesi
+    // kaliyordu. Olculdu: kavsak 4 -> 8 bilinen durum, kavşak 5 -> 7,
+    // kavsak 6 -> 8. Yani uc kavsagin ikisi ise atiliyordu.
+    // Duzeltme: ortalamak. Secim yapmak ek bir karardir; ortalama secimsiz.
+    if (writeBack) {
+        QLearningController birlestirilmis;
+        for (const JunctionId j : net.signalJunctions()) {
+            const auto& c =
+                dynamic_cast<const QLearningController&>(driver.controllerAt(j));
+            birlestirilmis.mergeFrom(c);
+        }
+        model = birlestirilmis;
     }
 
     EpisodeOutcome out;
@@ -77,6 +80,27 @@ EpisodeOutcome runEpisode(const Scenario& scenario, QLearningController& model,
     out.switchRequests = driver.switchRequests();
     return out;
 }
+
+std::vector<std::uint64_t> trainingSeeds(const TrainConfig& cfg) {
+    std::vector<std::uint64_t> v;
+    v.reserve(static_cast<std::size_t>(cfg.episodes));
+    for (int ep = 0; ep < cfg.episodes; ++ep) {
+        v.push_back(cfg.firstSeed + static_cast<std::uint64_t>(ep));
+    }
+    return v;
+}
+
+std::vector<std::uint64_t> evaluationSeeds(const TrainConfig& cfg) {
+    std::vector<std::uint64_t> v;
+    v.reserve(static_cast<std::size_t>(cfg.evalSeeds));
+    for (int k = 0; k < cfg.evalSeeds; ++k) {
+        v.push_back(cfg.evalFirstSeed + static_cast<std::uint64_t>(k));
+    }
+    return v;
+}
+
+/// Kesif olasiligini bolum ilerlemesine gore azalt.
+namespace {
 
 /// Kesif olasiligini bolum ilerlemesine gore azalt.
 double epsilonAt(const TrainConfig& cfg, int episode) {
@@ -115,11 +139,13 @@ TrainResult train(const Scenario& scenario, const TrainConfig& cfg, bool verbose
         // Degerlendirme TEK tohumda yapilirsa egrri kiris tabanindan
         // gürültü olarak ayırt edilemez. Bir kac tohumun ORTALAMASI alinir.
         EpisodeOutcome d;
-        for (int k = 0; k < kEvalSeeds; ++k) {
+        for (int k = 0; k < cfg.evalSeeds; ++k) {
+            // writeBack = false: degerlendirme politikayi DEGISTIRMEZ.
             const EpisodeOutcome e =
-                runEpisode(scenario, sonuc.policy, 9001 + static_cast<std::uint64_t>(k));
-            d.averageTravelTime += e.averageTravelTime / static_cast<double>(kEvalSeeds);
-            d.averageQueue += e.averageQueue / static_cast<double>(kEvalSeeds);
+                runEpisode(scenario, sonuc.policy,
+                           cfg.evalFirstSeed + static_cast<std::uint64_t>(k), false);
+            d.averageTravelTime += e.averageTravelTime / static_cast<double>(cfg.evalSeeds);
+            d.averageQueue += e.averageQueue / static_cast<double>(cfg.evalSeeds);
             d.completed += e.completed;
             d.switchRequests += e.switchRequests;
         }

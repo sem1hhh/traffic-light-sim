@@ -239,8 +239,16 @@ int main(int argc, char** argv) {
     std::vector<double> kuralSure;
 
     std::cout << "calistiriliyor...\n";
-    for (int s = 0; s < opt.evalSeeds; ++s) {
-        const std::uint64_t seed = static_cast<std::uint64_t>(100 + s);
+    // HATA DUZELTILDI: degerlendirme tohumlari 100..'dan basliyordu ve
+    // EGITIM tohumlari (1..episodes) ile cakisiyordu. train() icindeki
+    // degerlendirmede kullanilan evalFirstSeed ile AYNI aralik kullanilir;
+    // boylece degerlendirme hicbir zaman egitimde gorulmus bir
+    // gerceklesimi kullanmaz.
+    TrainConfig k;
+    k.episodes = opt.episodes;
+    const std::vector<std::uint64_t> degerlendirmeTohumlari = evaluationSeeds(k);
+    for (std::size_t s = 0; s < degerlendirmeTohumlari.size(); ++s) {
+        const std::uint64_t seed = degerlendirmeTohumlari[s];
         qSure.push_back(runOnce(sc, qFactory(policy), seed).averageTravelTime);
         sabitSure.push_back(runOnce(sc, sabitFabrika(), seed).averageTravelTime);
         kuralSure.push_back(runOnce(sc, kuralFabrika(), seed).averageTravelTime);
