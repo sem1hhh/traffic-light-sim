@@ -271,40 +271,38 @@ TEST_CASE("Durum ogrenildiginde politika OGRENILEN degeri kullanir") {
 }
 
 TEST_CASE("Q guncellemesi SONRAKI durumun degerini tasir (bootstrap)") {
-    // gamma = 0 kalsaydi Q yalnizca anlik odule bakar ve "gelecekte daha
-    // iyi olur" bilgisi TUMEN kaybolurdi. Bu, Q-learning'in en onemli
-    // ozelligidir; mutasyon testi gamma=0 ile bunu yakalamiyordu.
-    QLearningController c;
-    c.setEpsilon(0.0);
-    // minVisits = 0 -> kesif HIC calismaz ("bu eylem 0 kez denendi" ->
-    // yeterince denendi). Hangi eylemin secildigi bu testin konusu degil;
-    // secilen eylem `a` ile izlenir.
-    c.setMinVisits(0);
-    c.setDecayAlpha(false);
-    c.setAlpha(1.0);
+    // gamma = 0 kalsaydi Q yalnizca ANLIK odule bakar ve "gelecekte daha
+    // iyi olur" bilgisi tamamen kaybolurdu.
+    //
+    // AYIRT EDICI TASARIM: iki kontrolcu **ayni** anlik odulu alir, ama
+    // sonraki durumun Q degeri farklidir. Tek fark gamma'nin devreye
+    // girmesidir.
+    //   Ilk yazimda farkli ANLIK odul kullanildi; o zaman test, gamma
+    //   olmasa da gecirdi ve mutasyon kacti.
+    auto qUret = [](double sonrakiDurumunQ) {
+        QLearningController c;
+        c.setEpsilon(0.0);
+        c.setMinVisits(0);        // kesif yok: karar deterministik
+        c.setDecayAlpha(false);
+        c.setAlpha(1.0);
 
-    // Adim 1: s0 Stay -> kotu sonuc. Q(s0, Stay) = -10
-    const auto s0 = go(1, 0, 0, 0);
-    const Action a = c.decide(s0);
-    const auto kotu = go(5, 5, 5, 5);
-    c.onReward(kotu, a);
-    const double q0 = c.q(c.encode(s0), a);
-    CHECK_LT(q0, 0.0);
+        const auto s0 = go(1, 0, 0, 0);
+        const auto sonraki = go(5, 5, 5, 5);      // anlik odul: -20 (her iki icin de)
+        const std::size_t sk = c.encode(sonraki);
+        c.setQ(sk, Action::Stay, sonrakiDurumunQ);
+        c.setQ(sk, Action::Switch, sonrakiDurumunQ);
 
-    // Adim 2: s0 Stay -> iyi sonuc AMA sonraki durum kotu.
-    // gamma olmadan hedef sadece iyi odul olurdu; gamma ile kotu durumun
-    // degeri de tasinir, yani Q daha kotu olur.
-    c.decide(s0);
-    c.onReward(kotu, Action::Stay);
-    const double q0Kotu = c.q(c.encode(s0), a);
+        const Action a = c.decide(s0);
+        c.onReward(sonraki, a);
+        return c.q(c.encode(s0), a);
+    };
 
-    // Adim 3: ayni s0 Stay -> BOS sonraki durum (cezasiz).
-    c.decide(s0);
-    c.onReward(go(0, 0, 0, 0), Action::Stay);
-    const double q0Bos = c.q(c.encode(s0), a);
+    const double kotuGelecek = qUret(-10.0);
+    const double iyiGelecek = qUret(0.0);
 
-    // Bos sonraki durum daha iyi olmali (kotu gelecek tasinmasin).
-    CHECK_GT(q0Bos, q0Kotu);
+    // gamma > 0 iken kotu gelecegi Daha kotu deger vermeli.
+    CHECK_LT(kotuGelecek, iyiGelecek);
+    // gamma = 0 iken ikisi de -20 olur ve burasi BASARISIZ olur.
 }
 
 // ---------------------------------------------------------------------------
@@ -490,4 +488,46 @@ TEST_CASE("onReset zinciri KIRAR ama tabloyu KORUR") {
     // Durum 0 belki guncellenmis olabilir; onemli olan digerlerinin degismemesi.
     CHECK_LE(toplamQ(c) - toplamOnce, 1e-9);
     CHECK_GE(toplamQ(c) - toplamOnce, -1e-9);
+}
+TEST_CASE("Kaydet/yukle sonrasi GERCEK KOSU ayni sonucu verir") {
+    // !!!! KRITIK !!!!
+    // Onceki test "Kaydet/yukle AYNI karari uretir" yalnizca greedyAction()
+    // ile calisiyordu ve GEIYORDU — oysa gercek kosular FARKLI sonuc
+    // veriyordu. Sebep: Q tablosu birebir ayniydi ama sayaclar (sayac_,
+    // deneme_) kaydedilmiyordu; deneme_ epsilon=0 olsa bile ZIYARET
+    // TABANLI KESFI belirledigi icin yuklenen politika farkli davrasti.
+    //
+    // Burada KOSUYU calistiriyoruz. Tablo ayni ama sayaclar farkliysa
+    // karar dizisi farkli olur.
+    QLearningController a;
+    a.setMinVisits(4);
+
+    // Cok sayida karar ver ve odulle guncelle -> sayaclar dolu olsun.
+    for (int i = 0; i < 500; ++i) {
+        const auto o = go(i % 6, (i / 2) % 5, (i / 3) % 4, (i / 5) % 5, i % 2,
+                          static_cast<double>(i % 26));
+        a.decide(o);
+        a.onReward(go((i + 1) % 6, (i + 2) % 5, (i + 3) % 4, (i + 4) % 5,
+                      (i + 1) % 2, static_cast<double>((i + 1) % 26)),
+                   (i % 2) ? Action::Switch : Action::Stay);
+    }
+    a.setEpsilon(0.0);
+
+    std::ostringstream os;
+    a.serialize(os);
+    QLearningController b;
+    std::istringstream is(os.str());
+    b.deserialize(is);
+
+    // Ayni gozlem dizisi -> AYNI karar dizisi. (decide() kullanilir,
+    // greedyAction() DEGIL: kesfi de dahil.)
+    int fark = 0;
+    for (int i = 0; i < 400; ++i) {
+        const auto o = go(i % 6, (i / 2) % 5, (i / 3) % 4, (i / 5) % 5, i % 2,
+                          static_cast<double>(i % 26));
+        const Action ka = a.decide(o);
+        const Action kb = b.decide(o);
+        if (static_cast<int>(ka) != static_cast<int>(kb)) ++fark;
+    }
+    CHECK_EQ(fark, 0);
 }

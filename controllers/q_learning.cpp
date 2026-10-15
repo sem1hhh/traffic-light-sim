@@ -280,6 +280,18 @@ void QLearningController::serialize(std::ostream& os) const {
     for (const double v : tablo) {
         os << v << '\n';
     }
+    // Sayaclar: kesfi ve ogrenme oranini belirler; atlanirsa yuklenen
+    // politika FARKLI davranir (tespit edildi).
+    os << "sayac";
+    for (const std::uint32_t v : sayac_) {
+        os << ' ' << v;
+    }
+    os << "\ndeneme";
+    for (const std::uint32_t v : deneme_) {
+        os << ' ' << v;
+    }
+    os << '\n';
+
     // Bilinen-durum maskesi AYRI bir satirda: 2560 deger satir basina
     // yazmak dosyayi gereksiz buyuturdu.
     for (std::size_t i = 0; i < kStateKnown_.size(); ++i) {
@@ -313,9 +325,9 @@ void QLearningController::deserialize(std::istream& is) {
 
     gorulenler_.assign(n, false);
     kStateKnown_.assign(n, false);
+    tablo.resize(n * a);
     sayac_.assign(n * a, 0u);
     deneme_.assign(n * a, static_cast<std::uint32_t>(params_.minVisitsPerAction));
-    tablo.resize(n * a);
     for (double& v : tablo) {
         if (!(is >> v)) {
             throw std::runtime_error("Q tablosu eksik: veri bitti");
@@ -324,6 +336,34 @@ void QLearningController::deserialize(std::istream& is) {
 
     // Son sayidan sonra satir sonu kaliyor; once bosluk atlanmali yoksa
     // getline BOS satir okur ve maske cozumlenmez.
+    is >> std::ws;
+    // Sayaclari geri al
+    {
+        std::string satir;
+        std::vector<std::uint32_t>* hedef = nullptr;
+        for (int hangi = 0; hangi < 2; ++hangi) {
+            if (!std::getline(is, satir)) {
+                throw std::runtime_error("Q tablosu sayaclari eksik");
+            }
+            std::istringstream m{satir};
+            std::string etiket;
+            m >> etiket;
+            if (etiket == "sayac") hedef = &sayac_;
+            else if (etiket == "deneme") hedef = &deneme_;
+            if (hedef == nullptr) {
+                throw std::runtime_error("Q tablosu sayac etiketi taninmiyor");
+            }
+            hedef->assign(n * a, 0u);
+            for (std::size_t i = 0; i < n * a; ++i) {
+                std::uint32_t v = 0;
+                if (!(m >> v)) {
+                    throw std::runtime_error("Q tablosu sayac degerleri eksik");
+                }
+                (*hedef)[i] = v;
+            }
+        }
+    }
+
     is >> std::ws;
     // HATA (testler buldu): "bilinen durum" maskesi tasinmazsa yuklenen
     // kontrolcu ogrenilmis degerleri BILMIYOR ve her yerde tahmin edici

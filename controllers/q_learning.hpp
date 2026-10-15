@@ -180,6 +180,12 @@ public:
     double meanAbsQ() const;
 
     // --- Model kaydet/yukle (deney tekrarlanabilirligi icin) --------------
+    //
+    // DIKKAT: yalnizca Q tablosu KAYETMEK YETMEZ. `sayac_` ve `deneme_`
+    // sayaclari da tasinmalidir; `deneme_` epsilon=0 olsa bile KESFI
+    // belirler (ziyaret tabanli kesif, epsilon'dan bagimsiz calisir).
+    // Tespit edildi: tablo birebir ayni olmasina ragmen bellekteki ve
+    // dosyadan yuklenen politikayi kosmak FARKLI sonuc veriyordu.
     void serialize(std::ostream& os) const override;
     void deserialize(std::istream& is) override;
 
