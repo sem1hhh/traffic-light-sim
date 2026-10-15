@@ -2,6 +2,7 @@ add_library(tsc_core STATIC
     src/types.cpp
     src/rng.cpp
     src/grid.cpp
+    src/network.cpp
 )
 
 target_include_directories(tsc_core PUBLIC include)

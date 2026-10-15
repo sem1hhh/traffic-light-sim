@@ -3,6 +3,7 @@ add_executable(run_tests
     test_types.cpp
     test_rng.cpp
     test_grid.cpp
+    test_network.cpp
 )
 
 target_link_libraries(run_tests PRIVATE tsc_core third_party)
