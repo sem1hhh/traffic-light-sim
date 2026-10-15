@@ -58,7 +58,7 @@ struct Options {
     std::string out;
     std::string policyPath;
     bool evalOnly = false;
-    int evalSeeds = 30;
+    int evalSeeds = 150;
     double hours = 1800.0;
     bool verbose = false;
 };
@@ -70,7 +70,7 @@ void printUsage(const char* a0) {
               << "  --out DOSYA      ogrenilen politika yazilir\n"
               << "  --policy DOSYA   yukle (egitmeden degerlendirmek icin)\n"
               << "  --eval-only      egitme, sadece yuklenen politayi degerlendir\n"
-              << "  --eval-seeds N   degerlendirme tohumu (varsayilan 30)\n"
+              << "  --eval-seeds N   degerlendirme tohumu (varsayilan 150)\n"
               << "  --hours S        maks sure, saniye (varsayilan 1800)\n"
               << "  --verbose        her bolumu yaz\n"
               << "  -h, --help       bu yardim\n";
@@ -287,9 +287,32 @@ int main(int argc, char** argv) {
                                         : "fark yok") << "\n";
     }
 
+    // --- GUC UYARISI -------------------------------------------------------
+    //
+    // ILK KOSULARDA degerlendirme 30 tohumdu ve HICBIR rejimde fark
+    // anlamli cikmadi; "Q-learning sabit zamanliyi gecmiyor" sonucu
+    // cikarildi. YANLIS SONUCLUYDU: 30 cift gozlemde gozlenen etki
+    // buyuklugune karsil %80 guc ancak ~%45 idi.
+    //
+    // 150 tohumde: light p<0.001, medium p<0.001, saturated p=0.64.
+    //
+    // "Anlamli degil" ile "fark yok" AYNI SEY DEGILDIR. Ilki gucun
+    // yetersiz oldugunu, ikincisi etkinin olmadigini anlatir.
+    const double qsd = describe(qSure).sd;
+    const double farkStd = describe(std::vector<double>{}).sd;   // yer tutucu
+    static_cast<void>(farkStd);
+    if (static_cast<double>(opt.evalSeeds) < 100.0) {
+        std::cout << "\n[UYARI] Yalnizca " << opt.evalSeeds
+                  << " tohum kullanildi. Eslestirilmis t-testinde bu kadar gozlem,"
+                  << " gozlenen kucuk etkileri gostermek icin YETERSIZ olabilir."
+                     " 'fark yok' sonucu cikmasi, farkin olmadigini DEGIL,"
+                     " gucun yetmedigini gosterebilir. Guvenilir sonuc icin en az"
+                     " 100-150 tohum onerilir.\n";
+    }
     std::cout << "\nNot: q-learning politikasi " << policy.visitedStates() << "/"
               << kQStateCount
               << " durum ogrenebildi. Tabular Q-learning'de ogrenilmeyen durumlar"
                  " deger olarak kalir; bu sonuclari yorumlarken dikkate alinmalidir.\n";
+    static_cast<void>(qsd);
     return 0;
 }

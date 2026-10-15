@@ -8,6 +8,10 @@ csv/
 *.csv
 *.qmodel
 
+# Egitilmis politikalar (models/) DAHA SONRA commit edilir: egitim
+# surelidir ama kaydedilmis politika, rapordaki sonucun TEKRAR
+# uretilmesini saglayan tek seydir. Bu yuzden burada yasaklanmaz.
+
 # Grafik motoru
 GlistEngine/
 glistengine/
