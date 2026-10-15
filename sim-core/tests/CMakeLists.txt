@@ -7,7 +7,7 @@ add_executable(run_tests
 
 target_link_libraries(run_tests PRIVATE tsc_core third_party)
 
-# Cikti yolunu her yerde ayni tut sabit tut.
+# Cikti yolunu her yerde ayni tut (build/tests/run_tests).
 set_target_properties(run_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )

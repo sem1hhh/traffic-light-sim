@@ -152,7 +152,7 @@ TEST_CASE("connectivityMask sadece yol olan yonleri isaretler") {
 }
 
 // ---------------------------------------------------------------------------
-// Baglantilik (ulasilamayan hedef / baglantisiz yol agi)
+// Baglantilik: ulasilamayan hedef / baglantisiz yol agi tespiti
 // ---------------------------------------------------------------------------
 
 TEST_CASE("Bos ag bagli sayilir") {

@@ -119,7 +119,7 @@ public:
     /// Baglantilik kontrolunu baslatmak icin kullanilir; deterministiktir.
     Vec2i firstOccupied() const noexcept;
 
-    // --- Dogrulama (ulasilamayan hedef / baglantisiz yol agi) ----------
+    // --- Dogrulama: ulasilamayan hedef / baglantisiz yol agi tespiti ----------
 
     /// Butun yol/kavsak hucreleri TEK bir bagli kutuphanede mi?
     /// Bu olmadan simülasyon baslatilmaz.

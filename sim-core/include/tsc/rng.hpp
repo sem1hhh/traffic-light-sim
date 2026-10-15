@@ -7,10 +7,11 @@ namespace tsc {
 // ---------------------------------------------------------------------------
 // Deterministik sözde rastgele sayi ureteci (PCG32).
 //
-// Neden <random> degil :
-//   std::mt19937 / distribution'larin implementasyonu standarda gore degisebilir.
-//   Boylece "ayni seed -> ayni sonuc" garantisi  kaybolur. PCG32 ise
-//   algoritmasi sabit, cikti dizisi her platformda birebir ayni.
+// Neden <random> degil:
+//   std::mt19937 ve distribution'larin implementasyonu standarda gore
+//   degisebilir. Boylece "ayni seed -> ayni sonuc" tekrarlanabilirlik
+//   garantisi kaybolur. PCG32 ise algoritmasi sabit oldugu icin cikti dizisi
+//   her platformda birebir ayni.
 // ---------------------------------------------------------------------------
 
 /// 64 -> 64 bit karma (splitmix64). Tohum turetme ve akis ayriminda kullanilir.

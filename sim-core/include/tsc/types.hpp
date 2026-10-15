@@ -9,7 +9,7 @@ namespace tsc {
 //
 // Neden gerekli: simülasyon state'i ID-indexed tutulur.
 // `VehicleId` ile `JunctionId` birbirine karistirilamaz; derleyici hata verir.
-// Ayrica state kopyalanabilir olur -> snapshot / geri sarma ucuz olur.
+// Boylece state kopyalanabilir olur ve anlik goruntu (snapshot) ucuz olur.
 // ---------------------------------------------------------------------------
 
 template <typename Tag>
@@ -81,7 +81,7 @@ struct GridSize {
 // Zaman
 // ---------------------------------------------------------------------------
 
-/// Sabit zaman adimi (1 adim = 1 saniye).
+/// Sabit zaman adimi: 1 adim = 1 saniye.
 constexpr double kStepSeconds = 1.0;
 
 /// Toplam simülasyon süresi üst sınırı. Asilirsa koşu "tamamlanamadi" isaretlenir.

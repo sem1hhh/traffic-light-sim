@@ -8,7 +8,7 @@ csv/
 *.csv
 *.qmodel
 
-# GlistEngine
+# Grafik motoru
 GlistEngine/
 glistengine/
 libs/
@@ -16,6 +16,9 @@ extern/
 
 # Model ve varlik dosyalari (CC0 modeller harici kaynaktan indirilir)
 assets/kenney/
+
+# Bunlar yalnizca yerel calisma icindir; depo yalnizce kaynak kodu icerir.
+dosyalar/
 
 # IDE
 .vscode/
