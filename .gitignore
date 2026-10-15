@@ -17,9 +17,6 @@ extern/
 # Model ve varlik dosyalari (CC0 modeller harici kaynaktan indirilir)
 assets/kenney/
 
-# Bunlar yalnizca yerel calisma icindir; depo yalnizce kaynak kodu icerir.
-dosyalar/
-
 # IDE
 .vscode/
 .idea/
@@ -28,3 +25,6 @@ dosyalar/
 
 # macOS
 .DS_Store
+
+# NOT: Yerel calisma notlari ve kaynak belgeler bilerek burada degil.
+# Git bunlari .git/info/exclude icinde tutulur; boylece depo temiz kalir.
