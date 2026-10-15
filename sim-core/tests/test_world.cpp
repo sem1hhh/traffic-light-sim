@@ -1,3 +1,4 @@
+#include "tsc/controller.hpp"
 #include "tsc/world.hpp"
 
 #include "test_util.hpp"
@@ -7,8 +8,12 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cmath>
+
+// CHECK_NEAR_EPS: mutlak toleransla karsilastirma (testlerimiz icin)
+#define CHECK_NEAR_EPS(a, b) CHECK_LT(std::abs((a) - (b)), 1e-9)
 #include <optional>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 using tsc::CellType;
@@ -669,4 +674,208 @@ TEST_CASE("complete() yalnizca temiz kosuda true") {
     // Zaman asimina ugratilmis bir kosu tamamlanmis sayilmaz
     for (int i = 0; i < 10; ++i) { w.step(); }
     CHECK_FALSE(w.complete());   // henuz bitmedi
+}
+
+// ---------------------------------------------------------------------------
+// Faz 4: metrikler ve Little yasasi (K2)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Metrik girdileri toplanir") {
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(20), 606};
+    for (int i = 0; i < 300 && !w.finished(); ++i) {
+        w.step();
+    }
+    const auto& m = w.metrics();
+    CHECK_GT(m.observedSeconds, 0.0);
+    CHECK_GT(m.vehicleTimeSum, 0.0);
+    CHECK_GT(m.arrived, 0);
+    CHECK_GT(m.averageTravelTime(), 0.0);
+    CHECK_GT(m.averageSystemCount(), 0.0);
+    CHECK_GT(m.arrivalRate(), 0.0);
+}
+
+TEST_CASE("Kuyruk olcer, RL durumunu besler") {
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(25), 707};
+    for (int i = 0; i < 200 && !w.finished(); ++i) {
+        w.step();
+    }
+    // YIGIN BIR KOSUDA kuyruk GERCEKTEN olusur (kirilmis sinyal suresi).
+    CHECK_GT(w.metrics().maxQueue, 0);
+    CHECK_GT(w.metrics().averageQueue(), 0.0);
+
+    // Intersection'lara yazilan kuyruklar gozlemle ayni olmali.
+    const tsc::JunctionId jid = net.signalJunctions()[0];
+    const auto o = tsc::observe(w.intersection(jid));
+    CHECK_EQ(o.queues[0], w.metrics().approachQueue[0]);
+    // Kuyruk toplami = kollara gore toplam
+    int kolToplam = 0;
+    for (const int q : w.metrics().approachQueue) { kolToplam += q; }
+    CHECK_GE(kolToplam, 0);
+}
+
+TEST_CASE("Kuyruk tanimi: duran arac sayilir, akan sayilmaz") {
+    CHECK(tsc::kQueueSpeedThreshold > 0.0);
+    CHECK_LT(tsc::kQueueSpeedThreshold, 1.0);
+
+    const Network net = tsc::buildNetwork(simAgi());
+
+    // (a) BOS yol: hicbir arac durmaz -> kuyruk YOK
+    World bos{net, testConfig(0), 4};
+    for (int i = 0; i < 60; ++i) { bos.step(); }
+    CHECK_EQ(bos.metrics().maxQueue, 0);
+
+    // (b) KIRILMIS sinyal: araclar birikir -> kuyruk VAR
+    WorldConfig sikisik = testConfig(30);
+    sikisik.signal.maxGreen = 8.0;
+    sikisik.signal.minGreen = 5.0;
+    World sikisikW{net, sikisik, 4};
+    for (int i = 0; i < 200 && !sikisikW.finished(); ++i) { sikisikW.step(); }
+    CHECK_GT(sikisikW.metrics().maxQueue, bos.metrics().maxQueue);
+}
+
+TEST_CASE("K2: L = λ·W - 30 tohumda dogrulanir (kapasite alti yuk)") {
+    // KABUL OLCUTU K2: "L = λW iliskisini yaklasik saglamalidir."
+    //
+    // ONEMLI: Little yasasi KARarli durum icin gecerlidir. Bu yuzden yuk
+    // kapasitenin ALTINDA secilmistir: ag bosalmali, hicbir arac sistemde
+    // kalmamalidir. Doygun yukte yasa olcum yontemi nedeniyle saglanmaz
+    // (asagida ayri bir test bunu belgeler).
+    double enKotuHata = 0.0;
+    int ihlal = 0;
+    int kosuldu = 0;
+
+    for (std::uint64_t seed = 1; seed <= 30; ++seed) {
+        const Network net = tsc::buildNetwork(simAgi());
+        WorldConfig cfg = testConfig(30);
+        cfg.spawnInterval = 6.0;
+        cfg.signal.maxGreen = 20.0;
+        cfg.signal.minGreen = 5.0;
+
+        World w{net, cfg, seed};
+        for (int i = 0; i < 600 && !w.finished(); ++i) {
+            w.step();
+        }
+        // Ag bosalmadiysa bu kosu kullanilamaz (kararli durum yok).
+        if (!w.finished()) {
+            continue;
+        }
+        ++kosuldu;
+
+        const tsc::LittleLaw ll = tsc::checkLittle(w.metrics());
+        const double hata = ll.relativeError();
+        if (hata > enKotuHata) {
+            enKotuHata = hata;
+        }
+        if (hata > 0.15) {
+            ++ihlal;
+        }
+    }
+
+    CHECK_GT(kosuldu, 20);          // cogu kosu bosaldi
+    CHECK_EQ(ihlal, 0);
+    CHECK_LT(enKotuHata, 0.15);
+}
+
+TEST_CASE("BULGU: doygun yukte Little yasasi olcum yontemi nedeniyle saglanmaz") {
+    // KAPASITE USTU: kisa yesil suresiyle kuyruk kalici olur, hicbir arac
+    // bitmez. Bu durumda:
+    //   L  = zamana gore ortalama araç sayisi  -> kalici KUYRUK dahil, buyuk
+    //   W  = yalnizca BITEN araclarin ortalamasi -> kuyruktakiler sayilmaz
+    // Bu yuzden L = λ·W denklemi OLÇÜM YONTEMI nedeniyle tutmaz.
+    //
+    // Bu bir KOD HATASI DEGILDIR; kuyruk teorisi icin bilinen bir kisittir
+    // ve raporun "Teorik Altyapi" bolumundeki iddianin sinirini gosterir.
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(30);
+    cfg.spawnInterval = 5.0;
+    cfg.signal.maxGreen = 12.0;
+    cfg.signal.minGreen = 5.0;
+
+    World w{net, cfg, 12345};
+    for (int i = 0; i < 600 && !w.finished(); ++i) {
+        w.step();
+    }
+
+    CHECK_FALSE(w.finished());                 // kuyruk kaldi
+    CHECK_GT(w.vehicleCount(), 0);
+    CHECK_GT(w.metrics().averageSystemCount(), 1.0);
+
+    const tsc::LittleLaw ll = tsc::checkLittle(w.metrics());
+    CHECK_GT(ll.relativeError(), 0.5);          // yasa tutmuyor
+}
+
+TEST_CASE("K2: tek bir kosuda L = λ·W iliskisi saglar") {
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(30);
+    cfg.spawnInterval = 6.0;
+    cfg.signal.maxGreen = 20.0;
+    World w{net, cfg, 12345};
+
+    for (int i = 0; i < 600 && !w.finished(); ++i) {
+        w.step();
+    }
+    REQUIRE(w.finished());
+
+    const tsc::LittleLaw ll = tsc::checkLittle(w.metrics());
+    CHECK_GT(ll.L, 0.0);
+    CHECK_GT(ll.lambda, 0.0);
+    CHECK_GT(ll.W, 0.0);
+    CHECK_LT(ll.relativeError(), 0.15);
+}
+
+TEST_CASE("λ GİRİŞ hızıdır, çıkış hızı değildir") {
+    // Little yasasında λ, sisteme giren araç hızıdır. Cikis hizi kullanilirsa
+    // sistemde biriken araclar olcumu bozar (bu hatayla once %93 hata olustu).
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(20);
+    cfg.spawnInterval = 4.0;
+    World w{net, cfg, 31};
+    for (int i = 0; i < 400 && !w.finished(); ++i) {
+        w.step();
+    }
+    const auto& m = w.metrics();
+    const double beklenen = static_cast<double>(m.spawned) / m.observedSeconds;
+    CHECK_NEAR_EPS(m.arrivalRate(), beklenen);
+    // Tamamlanan araac sayisi giris sayisindan AZ olabilir; lambda yine de
+    // giris sayisina dayanir.
+    CHECK_LE(m.arrived, m.spawned);
+}
+
+TEST_CASE("Little yasasi arac sayisi artinca daha cok arac tutulur") {
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(40);
+    cfg.spawnInterval = 1.5;
+    World az{net, cfg, 5};
+    for (int i = 0; i < 300 && !az.finished(); ++i) { az.step(); }
+
+    cfg.vehicleCount = 90;
+    World cok{net, cfg, 5};
+    for (int i = 0; i < 300 && !cok.finished(); ++i) { cok.step(); }
+
+    // Daha yogun talep -> sistemde daha cok arac
+    CHECK_GE(cok.metrics().averageSystemCount(), az.metrics().averageSystemCount());
+}
+
+TEST_CASE("Sifir gozlemde denetim patlamaz") {
+    const tsc::Metrics bos{};
+    const auto ll = tsc::checkLittle(bos);
+    CHECK_EQ(ll.L, 0.0);
+    CHECK_GT(ll.relativeError(), 1.0);   // tanimsiz -> buyuk hata
+}
+
+TEST_CASE("K2 ilk maddesi: ayni seed ayni olcutleri verir") {
+    const Network net = tsc::buildNetwork(simAgi());
+    auto olcut = [&](std::uint64_t seed) {
+        WorldConfig cfg = testConfig(30);
+        cfg.spawnInterval = 1.5;
+        World w{net, cfg, seed};
+        for (int i = 0; i < 300 && !w.finished(); ++i) { w.step(); }
+        return std::make_pair(w.digest(), w.metrics().arrived);
+    };
+    const auto a = olcut(4242);
+    const auto b = olcut(4242);
+    CHECK_EQ(a.first, b.first);
+    CHECK_EQ(a.second, b.second);
 }

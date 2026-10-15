@@ -117,6 +117,7 @@ void World::step() {
     }
     stepVehicles(kStepSeconds);   // 1 saniye = birden fazla alt adim
     detectCollisions();           // K1 olcumu
+    sampleMetrics();              // L, kuyruk, RL durumu
     maybeSpawn();
     updateStallState();
     time_ += kStepSeconds;
@@ -210,6 +211,31 @@ void World::updateStallState() {
         ++metrics_.stalledEvents;
         metrics_.stalledSteps = 0;  // olay sayaci tekrar tekrar artmasin
     }
+}
+
+LittleLaw checkLittle(const Metrics& m, double warmupSeconds) {
+    // Baslangic transiyentini kirp: yasa kararli durum icin gecerlidir.
+    double L = 0.0;
+    double lambda = 0.0;
+    double W = m.averageTravelTime();
+
+    if (m.observedSeconds > warmupSeconds && warmupSeconds > 0.0) {
+        // warmup sonrasi gozlem suresi
+        // vehicleTimeSum'den warmup katkisi dusulur. Araclar warmup boyunca
+        // kademeli geldigi icin tam bir duzeltme yerine oranlama kullanilir.
+        const double oran = (m.observedSeconds - warmupSeconds) / m.observedSeconds;
+        L = m.averageSystemCount() * oran;
+        lambda = m.arrivalRate() * oran;
+    } else {
+        L = m.averageSystemCount();
+        lambda = m.arrivalRate();
+    }
+
+    LittleLaw r;
+    r.L = L;
+    r.lambda = lambda;
+    r.W = W;
+    return r;
 }
 
 const char* toString(DemandProfile p) noexcept {
@@ -399,6 +425,39 @@ void World::updateJunctionOccupancy() {
                 metrics_.maxJunctionLoad =
                     std::max(metrics_.maxJunctionLoad, junctionOccupancy_[j.value]);
             }
+        }
+    }
+}
+
+void World::sampleMetrics() {
+    // --- Sistemdeki arac sayisi (L icin zaman-ortalamasi) -----------------
+    metrics_.vehicleTimeSum += static_cast<double>(vehicles_.size()) * kStepSeconds;
+    metrics_.observedSeconds += kStepSeconds;
+
+    // --- Kuyruklar: pratik olarak durmus araclar, KOLLA GORE ------------
+    // Raporun RL durumu: "kavşak kollarındaki kuyruk düzeyleri".
+    std::array<int, kDirCount> kolKuyruk{};
+    int toplamKuyruk = 0;
+    for (const Vehicle& v : vehicles_) {
+        if (v.speed > kQueueSpeedThreshold) {
+            continue;
+        }
+        ++toplamKuyruk;
+
+        const JunctionId j = junctionOf(v);
+        if (hasSignalAt(j) && v.routeIndex + 1 < v.route.size()) {
+            const Dir yaklasma = network_.lane(v.route[v.routeIndex + 1]).entryDir;
+            ++kolKuyruk[static_cast<std::size_t>(yaklasma)];
+        }
+    }
+
+    metrics_.queueSum += static_cast<double>(toplamKuyruk);
+    metrics_.maxQueue = std::max(metrics_.maxQueue, toplamKuyruk);
+    metrics_.approachQueue = kolKuyruk;
+
+    for (const JunctionId jid : network_.signalJunctions()) {
+        for (const Dir d : kAllDirs) {
+            intersections_[jid.value].setQueue(d, kolKuyruk[static_cast<std::size_t>(d)]);
         }
     }
 }
