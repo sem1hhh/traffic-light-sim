@@ -1,5 +1,7 @@
 #pragma once
 
+#include "tsc/car_following.hpp"
+#include "tsc/intersection.hpp"
 #include "tsc/network.hpp"
 #include "tsc/rng.hpp"
 #include "tsc/types.hpp"
@@ -36,6 +38,13 @@ struct Vehicle {
     std::vector<LaneId> route;
     std::size_t routeIndex = 0;   ///< route icindeki mevcut konum
 
+    /// Toplam hareketsiz sure (kirmizi isikta, kuyrukta bekleme dahil).
+    double waitTime = 0.0;
+    /// Arac simdi duraklamis mi (hiz ~ 0)? Bekleme olcumu bununla tutulur.
+    bool stopped = false;
+    /// Kirmizi isik yuzunden mi duruyor? (tikanma sayacina GIRMEZ)
+    bool waitingAtRed = false;
+
     bool valid() const noexcept { return id.valid() && currentLane.valid(); }
 };
 
@@ -63,12 +72,14 @@ struct Metrics {
     int maxStalled = 0;      ///< kosu boyunca gorulen en yuksek deger
     int stalledSteps = 0;    ///< arac hareketi olmadan gecen ardisik adim
     int stalledEvents = 0;   ///< tespit edilen tikanma olaylarinin sayisi
+    int collisions = 0;      ///< tespit edilen carpisma sayisi (K1: daima 0)
+    double minGapSeen = 1.0e9;  ///< gozlenen en kucuk araclar arasi mesafe
 
     double averageTravelTime() const noexcept {
         return arrived > 0 ? totalTravelTime / static_cast<double>(arrived) : 0.0;
     }
 
-    /// Bekleme suresi olculmediyse nullopt doner. (Faz 2/3'te uygulanir.)
+    /// Bekleme suresi: Faz 3'te OLÇÜLMEYE BAŞLANDI.
     std::optional<double> averageWaitTime() const noexcept {
         if (!waitTimeMeasured) {
             return std::nullopt;
@@ -95,6 +106,13 @@ struct WorldConfig {
     double spawnInterval = 2.0;     ///< araclar arasi uretim araligi (s)
     double timeLimit = 1800.0;      ///< bu surenin uzerinde koşu basarisiz sayilir
     std::uint64_t demandSeed = 0;   ///< talep (baslangic/hes) uretimi icin ayri tohum
+
+    IdmParams idm{};
+    SignalTiming signal{};          ///< tum kavsaklar icin varsayilan zamanlama
+
+    /// Kavsak icinde ayni anda bulunabilecek azami arac sayisi.
+    /// Faz 3c: kavsak tıkanmasini (gridlock) onlemek icin.
+    int junctionCapacity = 4;
 };
 
 // ---------------------------------------------------------------------------
@@ -113,6 +131,7 @@ struct Snapshot {
     std::uint64_t driveRngInc = 1;
     int spawnCursor = 0;
     std::uint32_t nextVehicleCounter = 0;  ///< ID sayaci; atlarsinca tekrarlanabilirlik bozulur
+    std::vector<Intersection::State> junctionStates;  ///< tum kavsak faz sayaclari
 };
 
 // ---------------------------------------------------------------------------
@@ -144,9 +163,22 @@ public:
     /// Arac uretir ve listede tutar. Gecersiz seritler reddedilir.
     bool spawnVehicle(LaneId entry, LaneId exit);
 
+    // --- Kavsaklar ---------------------------------------------------------
+
+    /// Sinyalli kavsaklar. JunctionId degeriyle eslesen sekilde depolar;
+    /// sinyal olmayan dugumler bos birakilir.
+    Intersection& intersection(JunctionId j);
+    const Intersection& intersection(JunctionId j) const;
+    bool hasSignalAt(JunctionId j) const;
+
+    /// Bu anlik durumda toplam kac arac kavsak icinde (trafik sonrasi
+    /// celisilebilir konumda) bulunuyor.
+    int vehiclesInJunction(JunctionId j) const;
+
     // --- Olcum / dogrulama --------------------------------------------------
 
     const Metrics& metrics() const noexcept { return metrics_; }
+    const WorldConfig& config() const noexcept { return config_; }
 
     /// Bir aracin neden takildigi (StallReason) - None degilse.
     StallReason lastStall() const noexcept { return lastStall_; }
@@ -164,13 +196,51 @@ public:
     void restore(const Snapshot& s);
 
 private:
+    /// Makro adim (1 saniye) icinde birden fazla ALT ADIM yapar.
+    /// IDM, 1 saniyelik tek adimda kararli degildir: arac 10 m/s ile
+    /// duran onundeki aracin uzerine bir adimda gecer. Bu yuzden konum
+    /// guncellemeleri kucuk alt adimlara bolunur.
+    /// Disaridan gorulen zaman adimi DEGISTIRILMEZ (IG-2: 1 adim = 1 saniye).
     void stepVehicles(double dt);
+    /// Tek alt adim: hizlari hesapla VE konumlari ilerlet.
+    void integrateSubStep(double h);
     /// Serit bittiginde araci rotada bir sonraki serite gecirir.
     enum class AdvanceResult { Moved, Arrived, Stuck };
     AdvanceResult advanceLane(Vehicle& v);
     void maybeSpawn();
     /// Hareketsizlik ve rota tutarsizligini tespit eder.
     void updateStallState();
+    /// Her aracin onundeki araci ve/veya durak cizgisini bulur; IDM uygular.
+    /// Sinyal faz makinesini ilerletir. Sinyaller donmus kalirsa hicbir
+    /// arac kavsahta giremez; bu yuzden her adimda cagrilir.
+    void stepSignals(double dt);
+    /// K1 olcumu: ayni seritte araclar arasi mesafe arac boyundan kucukse carpisma.
+    void detectCollisions();
+    /// K1'in GARANTISI: hicbir arac digerinin uzerinden gecemez.
+    /// IDM konforlu frenleme (3 m/s^2) mevcut boslukta durmaya yetmeyebilir;
+    /// bu yuzden konumlar serit sirasiyla onden arkaya taranir ve
+    /// minimum arac boyu mesafesi zorlanir. IDM gercekci davranis verir,
+    /// bu kisit carpismayi YAPIKSAL OLARAK imkansiz kilar.
+    void enforceMinimumGap();
+    /// laneVehicles_ ve vehicleIndex_ haritalarini yeniden kurar.
+    /// Konum guncellemesinden SONRA cagrilmalidir; aksi halde arac eski
+    /// seritte gorunur ve kisit/celiski tespiti yanlis sonuc verir.
+    void rebuildLaneIndex();
+    /// Sonraki seritte girmeye yer var mi? KAVSAK GIRIS KONTROLU (IG-4):
+    /// "cikis yeri yoksa arac kavsaga girmemelidir". Yer yoksa arac
+    /// mevcut seridin sonunda bekler - bu, tıkanmanin (gridlock) temel
+    /// nedeni olan "kavsak doluysa arac giremez" kuralidir.
+    bool nextLaneHasRoom(const Vehicle& v, LaneId nextLane) const;
+    void applyCarFollowing(double dt);
+    /// VehicleId -> vehicles_ indeksi. Serit siralamasi icin gereklidir
+    /// (araclar swap-and-pop ile yer degistirir, ID degismez).
+    Vehicle& findVehicle(VehicleId id);
+    const Vehicle& findVehicle(VehicleId id) const;
+    /// Arac icinde bulundugu kavsagi (yoksa JunctionId{}) dondurur.
+    JunctionId junctionOf(const Vehicle& v) const;
+    /// Durak cizgisine kalan mesafe; engel yoksa cok buyuk deger.
+    double gapToStopLine(const Vehicle& v) const;
+    bool mustStopAtRed(const Vehicle& v) const;
     std::uint64_t motionFingerprint() const;
 
     Network network_;
@@ -191,6 +261,15 @@ private:
     std::uint32_t nextVehicleCounter_ = 0;
     StallReason lastStall_ = StallReason::None;
     std::uint64_t lastMotionFingerprint_ = 0;
+    /// Sinyalli kavsaklar. Indeksi JunctionId degeriyle ayni.
+    std::vector<Intersection> intersections_;
+    /// Anlik durumda kavsak ici arac sayilari (junctionCapacity kontrolu icin).
+    mutable std::vector<int> junctionOccupancy_;
+    /// vehicleId -> vehicles_ indeksi. Serit siralamasi icin gereklidir
+    /// (araclar swap-and-pop ile yer degistirir, ID degismez).
+    std::vector<std::size_t> vehicleIndex_;
+    /// laneId -> o seritteki araclar (konuma gore sirali, ondeki basta)
+    std::vector<std::vector<VehicleId>> laneVehicles_;
     double nextSpawnTime_ = 0.0;
 };
 

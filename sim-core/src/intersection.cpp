@@ -233,6 +233,32 @@ std::size_t Intersection::conflictingGreenCount() const {
     return (eksen0Yesil && eksen1Yesil) ? 1u : 0u;
 }
 
+Intersection::State Intersection::snapshotState() const {
+    State st;
+    st.phase = phase_;
+    st.state = state_;
+    st.phaseElapsed = phaseElapsed_;
+    st.greenElapsed = greenElapsed_;
+    st.stateElapsed = stateElapsed_;
+    st.switchCount = switchCount_;
+    st.rejectedSwitches = rejectedSwitches_;
+    st.forcedSwitches = forcedSwitches_;
+    st.switchRequested = switchRequested_;
+    return st;
+}
+
+void Intersection::restoreState(const State& st) {
+    phase_ = st.phase;
+    state_ = st.state;
+    phaseElapsed_ = st.phaseElapsed;
+    greenElapsed_ = st.greenElapsed;
+    stateElapsed_ = st.stateElapsed;
+    switchCount_ = st.switchCount;
+    rejectedSwitches_ = st.rejectedSwitches;
+    forcedSwitches_ = st.forcedSwitches;
+    switchRequested_ = st.switchRequested;
+}
+
 bool Intersection::anyPhaseOverrun() const {
     return state_ == SignalState::Green && greenElapsed_ > timing_.maxGreen;
 }

@@ -9,6 +9,16 @@ namespace {
 
 /// FNV-1a 64-bit karma. Sirali bayt beslemesi; platformdan bagimsiz cikar.
 constexpr std::uint64_t kFnvOffset = 14695981039346656037ULL;
+
+/// Arac boyu (m). Iki aracin merkezleri arasindaki minimum bosluktur.
+constexpr double kVehicleLength = 4.5;
+/// "Onunde engel yok" anlamina gelen mesafe.
+constexpr double kNoObstacle = 1.0e9;
+
+/// Bir saniyelik makro adim kac alt adime bolunur?
+/// IDM 1 saniyelik tek adimda kararli DEGILDIR (arac duran onundekinin
+/// uzerinden gecer). 0.1 s'lik alt adimlar K1'i garanti eder.
+constexpr int kCarFollowingSubSteps = 10;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
 void hashBytes(std::uint64_t& h, const void* data, std::size_t n) {
@@ -44,6 +54,19 @@ World::World(const Network& network, WorldConfig config, std::uint64_t seed)
     const NetworkErrors err = validateNetwork(network_);
     ready_ = err.ok();
     vehicles_.reserve(static_cast<std::size_t>(config_.vehicleCount));
+
+    // Sinyalli her dugum icin bir faz makinesi kur.
+    intersections_.assign(network_.nodeCount(), Intersection{});
+    for (const JunctionId jid : network_.signalJunctions()) {
+        std::vector<Dir> arms;
+        for (const Dir d : kAllDirs) {
+            if (network_.node(jid).arms & (1u << static_cast<int>(d))) {
+                arms.push_back(d);
+            }
+        }
+        intersections_[jid.value] = Intersection{jid, arms, config_.signal};
+    }
+    junctionOccupancy_.assign(network_.nodeCount(), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +115,8 @@ void World::step() {
     if (!ready_) {
         return;
     }
-    stepVehicles(kStepSeconds);
+    stepVehicles(kStepSeconds);   // 1 saniye = birden fazla alt adim
+    detectCollisions();           // K1 olcumu
     maybeSpawn();
     updateStallState();
     time_ += kStepSeconds;
@@ -138,9 +162,11 @@ std::uint64_t World::motionFingerprint() const {
 
 /// Hareketsizlik ve rota tutarsizligini TESPIT EDER (sessizce beklemez).
 void World::updateStallState() {
+    // KIRMIZI ISIKTA BEKLEYEN araç tıkanma DEĞİLDİR; sıradaki yeşil
+    // gelince kendiliğinden kalkar. Sayac yalnızca gerçek kilitlenmeyi görür.
     int hareketsiz = 0;
     for (const Vehicle& v : vehicles_) {
-        if (v.speed <= 0.0) {
+        if (v.speed <= 0.0 && !v.waitingAtRed) {
             ++hareketsiz;
         }
     }
@@ -154,7 +180,10 @@ void World::updateStallState() {
     const bool ilerlemeVar = (parmak != lastMotionFingerprint_);
     lastMotionFingerprint_ = parmak;
 
-    if (hareketsiz == 0 && ilerlemeVar) {
+    // KIRMIZI ISIKTA BEKLEMEK TIKANMA DEGILDIR.
+    // Butun kuyruklar yalnizca kirmizi isikta bekliyorsa sayac sifirlanir;
+    // yesil gelince araçlar kendiliğinden kalkar.
+    if (hareketsiz == 0) {
         metrics_.stalledSteps = 0;
         lastStall_ = StallReason::None;
         return;
@@ -162,7 +191,7 @@ void World::updateStallState() {
 
     if (ilerlemeVar) {
         metrics_.stalledSteps = 0;
-    } else if (!vehicles_.empty()) {
+    } else {
         ++metrics_.stalledSteps;
     }
 
@@ -183,11 +212,259 @@ void World::updateStallState() {
     }
 }
 
+Intersection& World::intersection(JunctionId j) { return intersections_[j.value]; }
+
+const Intersection& World::intersection(JunctionId j) const { return intersections_[j.value]; }
+
+bool World::hasSignalAt(JunctionId j) const {
+    return j.valid() && j.value < intersections_.size() && intersections_[j.value].active();
+}
+
+int World::vehiclesInJunction(JunctionId j) const {
+    if (!hasSignalAt(j)) {
+        return 0;
+    }
+    return junctionOccupancy_[j.value];
+}
+
+Vehicle& World::findVehicle(VehicleId id) {
+    return vehicles_[vehicleIndex_[id.value]];
+}
+
+const Vehicle& World::findVehicle(VehicleId id) const {
+    return vehicles_[vehicleIndex_[id.value]];
+}
+
+JunctionId World::junctionOf(const Vehicle& v) const {
+    // Arac sonraki seride ve o serit bir kavsaktan basliyorsa orada.
+    if (v.routeIndex + 1 < v.route.size()) {
+        return network_.lane(v.route[v.routeIndex + 1]).from;
+    }
+    return JunctionId{};
+}
+
+double World::gapToStopLine(const Vehicle& v) const {
+    const Lane& lane = network_.lane(v.currentLane);
+    return lane.length - v.position;
+}
+
+bool World::mustStopAtRed(const Vehicle& v) const {
+    const JunctionId j = junctionOf(v);
+    if (!hasSignalAt(j)) {
+        return false;
+    }
+    const Lane& next = network_.lane(v.route[v.routeIndex + 1]);
+    return !intersections_[j.value].hasGreen(next.entryDir);
+}
+
+void World::enforceMinimumGap() {
+    // K1'in YAPISAL GARANTISI. IDM konforlu frenleme (3 m/s^2) mevcut
+    // boslukta durmaya yetmeyebilir; bu yuzden konumlar serit sirasiyla
+    // onden arkaya taranip arac boyu mesafesi ZORLANIR.
+    //
+    // Yapisi: liste konuma gore azalan sirali -> liste[k] ONDEKI.
+    // Cakisma varsa once ONDEKI arac ileri itilir (yol varsa); yol yoksa
+    // arkadaki geri itilir. Boylece hicbir arac digerinin uzerinden gecemez.
+    for (const auto& liste : laneVehicles_) {
+        if (liste.size() < 2) {
+            continue;
+        }
+        const Lane& lane = network_.lane(findVehicle(liste.front()).currentLane);
+        // Sifir uzunluklu seritler fiziksel uzunluga sahip degildir.
+        if (lane.length <= 0.0) {
+            continue;
+        }
+
+        // ARKADAN ONE dogru gezilir. Onde bir araci ILERI itmek, onun
+        // ondekiyle olan mesafesini azaltir; bu yuzden o cift EN SON
+        // ele alinmalidir. Onden arkaya gidilseydi bir sonraki cift
+        // bozulur ve araclar ust uste binmeye devam ederdi.
+        for (std::size_t k = liste.size() - 1; k > 0; --k) {
+            // liste AZALAN sirali: liste[k] ONDEKI, liste[k+1] arkadaki.
+            Vehicle& on = findVehicle(liste[k]);          // ondeki
+            Vehicle& arka = findVehicle(liste[k + 1]);    // arkadaki
+
+            if (on.position - arka.position >= kVehicleLength) {
+                continue;   // zaten yeterli mesafe var
+            }
+
+            // Once arkadakini geri it; negatif olmayacaksa temiz ve
+            // one dogru etkilemez.
+            const double geriCekilmis = on.position - kVehicleLength;
+            if (geriCekilmis >= 0.0) {
+                arka.position = geriCekilmis;
+            } else {
+                // Ondeki arac seridin basina cok yakin; ONUNU ileri it.
+                const double ileri = arka.position + kVehicleLength;
+                if (ileri <= lane.length) {
+                    on.position = ileri;
+                } else {
+                    // Yol yok: arkadaki en cok geri gidebilecegi yere cek.
+                    arka.position = std::max(0.0, lane.length - kVehicleLength);
+                    on.position = std::max(on.position, arka.position + kVehicleLength);
+                }
+            }
+            arka.speed = 0.0;   // arkadaki durmak zorunda
+            arka.stopped = true;
+        }
+    }
+}
+
+void World::detectCollisions() {
+    // K1: carpisma sayisi sifir olmali. Ayni seritteki araclar arasinda
+    // merkez mesafesi arac boyundan kucukse carpisma vardir.
+    for (const auto& liste : laneVehicles_) {
+        // SIFIR UZUNLUKLU seritler (cikmaz ucu -> kavsak gecisleri) fiziksel
+        // uzunluga sahip degildir; uzerlerindeki araclar konum 0'da kuyruk
+        // yapar ve konum burada anlamsizdir. enforceMinimumGap da ayni
+        // sebeple bunlari atlar; carpisma olcumu tutarli olmali.
+        if (liste.empty()) {
+            continue;
+        }
+        if (network_.lane(findVehicle(liste.front()).currentLane).length <= 0.0) {
+            continue;
+        }
+        // liste[k] ondeki, liste[k+1] arkadaki -> mesafe = once - sonra
+        for (std::size_t k = 0; k + 1 < liste.size(); ++k) {
+            const Vehicle& on = findVehicle(liste[k]);
+            const Vehicle& arka = findVehicle(liste[k + 1]);
+            const double mesafe = on.position - arka.position;
+            metrics_.minGapSeen = std::min(metrics_.minGapSeen, mesafe);
+            if (mesafe < kVehicleLength) {
+                ++metrics_.collisions;
+            }
+        }
+    }
+}
+
+void World::stepSignals(double dt) {
+    for (Intersection& j : intersections_) {
+        if (j.active()) {
+            j.step(dt);
+        }
+    }
+}
+
+void World::rebuildLaneIndex() {
+    laneVehicles_.assign(network_.laneCount(), {});
+    // vehicleIndex_ arac ID'sine gore indekslenir; sayac buyuyebildigi icin
+    // once yeterince buyutulur. (Boyutlandirmadan yazmak -> SIGSEGV.)
+    vehicleIndex_.assign(nextVehicleCounter_, 0);
+    for (std::size_t i = 0; i < vehicles_.size(); ++i) {
+        vehicleIndex_[vehicles_[i].id.value] = i;
+    }
+    for (const Vehicle& v : vehicles_) {
+        if (v.currentLane.value < laneVehicles_.size()) {
+            laneVehicles_[v.currentLane.value].push_back(v.id);
+        }
+    }
+    for (auto& liste : laneVehicles_) {
+        std::sort(liste.begin(), liste.end(), [this](VehicleId a, VehicleId b) {
+            const double ya = findVehicle(a).position;
+            const double yb = findVehicle(b).position;
+            if (ya != yb) {
+                return ya > yb;   // ondeki (buyuk konum) once
+            }
+            return a.value < b.value;   // esitlikte ID sirasi: deterministik
+        });
+    }
+}
+
+void World::applyCarFollowing(double dt) {
+    // --- 1) Serit basina arac listesi, konuma gore sirali -----------------
+    // Ondekiler (buyuk konum) once. Esit konumda ID sirasi kirilir:
+    // determinizm icin zorunlu.
+    rebuildLaneIndex();
+
+    // --- 2) Her aracin onundeki engeli bulup IDM uygula ---------------------
+    for (const auto& liste : laneVehicles_) {
+        for (std::size_t k = 0; k < liste.size(); ++k) {
+            Vehicle& v = findVehicle(liste[k]);
+
+            double gap = kNoObstacle;
+            double leadSpeed = v.speed;
+
+            if (k > 0) {
+                // Ayni seritte ONUNDEKI arac liste[k-1]'dir (azalan sira).
+                const Vehicle& ondek = findVehicle(liste[k - 1]);
+                gap = std::max(0.0, ondek.position - v.position - kVehicleLength);
+                leadSpeed = ondek.speed;
+            } else if (v.routeIndex + 1 < v.route.size()) {
+                // Seritin sonu: durak cizgisi ve kirmizi isik.
+                const Lane& laneNow = network_.lane(v.currentLane);
+                if (laneNow.length <= 0.0) {
+                    // Gecis seridi (or. cikmaaz ucu -> kavsak): durak cizgisi
+                    // YOK. Arac aninda gecer; engel yalnizca ilk arac olabilir.
+                    const LaneId nextLane = v.route[v.routeIndex + 1];
+                    if (nextLane.value < laneVehicles_.size() &&
+                        !laneVehicles_[nextLane.value].empty()) {
+                        const Vehicle& ondeki = findVehicle(laneVehicles_[nextLane.value].front());
+                        leadSpeed = ondeki.speed;
+                        gap = std::max(0.0, ondeki.position - kVehicleLength);
+                    } else {
+                        gap = kNoObstacle;
+                    }
+                    goto hesaplandi;
+                }
+
+                gap = std::max(0.0, gapToStopLine(v));
+
+                if (mustStopAtRed(v)) {
+                    leadSpeed = 0.0;   // kirmizi isik: durak cizgisi engel
+                } else {
+                    // Yesil. Sonraki seridin ilk araci varsa o engeldir;
+                    // MESAFE kalan yol + onun konumu olmak zorunda.
+                    // (Yalnizca "kalan yol" alinirsa araclar sifir mesafede
+                    // birbirini gorur ve simulasyon kilitlenir.)
+                    const LaneId nextLane = v.route[v.routeIndex + 1];
+                    if (nextLane.value < laneVehicles_.size() &&
+                        !laneVehicles_[nextLane.value].empty()) {
+                        const Vehicle& ondeki = findVehicle(laneVehicles_[nextLane.value].front());
+                        leadSpeed = ondeki.speed;
+                        gap = std::max(0.0, gap + ondeki.position - kVehicleLength);
+                    } else {
+                        gap = kNoObstacle;   // kavsakta kimse yok: girebilir
+                    }
+                }
+            }
+
+        hesaplandi:
+            v.speed = idmSpeedAfterStep(config_.idm, v.speed, gap, leadSpeed,
+                                        dt, config_.idm.desiredSpeed);
+            v.stopped = (v.speed < 0.05);
+            v.waitingAtRed = v.stopped && mustStopAtRed(v);
+            if (v.stopped) {
+                v.waitTime += dt;
+            }
+        }
+    }
+}
+
+bool World::nextLaneHasRoom(const Vehicle&, LaneId nextLane) const {
+    // DOGRUDAN vehicles_ uzerinden taranir, laneVehicles_ UZERINDEN DEGIL.
+    // laneVehicles_ alt adimin BASINDA kurulur; bu alt adim icinde baska
+    // araclar gecis yaparsa bayat kalir ve birden fazla arac ayni konuma
+    // (0) girip ust uste biner. Canli liste her zaman gunceldir.
+    for (const Vehicle& other : vehicles_) {
+        if (other.currentLane == nextLane && other.position < kVehicleLength) {
+            return false;
+        }
+    }
+    return true;
+}
+
 World::AdvanceResult World::advanceLane(Vehicle& v) {
     // Rota uretimde hesaplandi; arac bu diziyi izler, baglantilari secmez.
     if (v.routeIndex + 1 < v.route.size()) {
+        const LaneId sonraki = v.route[v.routeIndex + 1];
+        // KAVSAK GIRIS KONTROLU: hedef serit doluysa girme. Bu olmadan
+        // birden fazla arac ayni konuma gecip zincirleme birikir ve
+        // simulasyon kilitlenir.
+        if (!nextLaneHasRoom(v, sonraki)) {
+            return AdvanceResult::Stuck;
+        }
         ++v.routeIndex;
-        v.currentLane = v.route[v.routeIndex];
+        v.currentLane = sonraki;
         v.position = 0.0;
         return AdvanceResult::Moved;
     }
@@ -200,68 +477,97 @@ World::AdvanceResult World::advanceLane(Vehicle& v) {
 }
 
 void World::stepVehicles(double dt) {
-    // Hiz * dt bu adimde kat edilecek mesafe. Serit sinirini asarsa kalan
-    // mesafe bir sonraki serit icin harcanir; hicbir mesafe atilmaz.
-    for (std::size_t i = 0; i < vehicles_.size(); ++i) {
-        Vehicle& v = vehicles_[i];
-        double kalanMesafe = v.speed * dt;
-        v.totalDistance += kalanMesafe;
+    // IDM kararliligi icin makro adim alt adimlara bolunur.
+    // 1 saniyelik TEK bir adimda IDM kararli degildir: 10 m/s hizla giden
+    // arac, duran onundekinin uzerinden bir adimda gecer (K1 ihlali).
+    // Disaridan gorulen zaman adimi degismez: IG-2 '1 adim = 1 saniye'.
+    const int altAdim = kCarFollowingSubSteps;
+    const double h = dt / static_cast<double>(altAdim);
+    for (int i = 0; i < altAdim; ++i) {
+        stepSignals(h);
+        applyCarFollowing(h);
+        integrateSubStep(h);   // kisit hareketin icinde uygulanir
+    }
+}
 
-        // Cevrim sayaci: kotu aglarda sonsuz donguye girmeyi engeller.
-        for (int guvenlik = 0; kalanMesafe > 0.0 && guvenlik < 256; ++guvenlik) {
-            const Lane& lane = network_.lane(v.currentLane);
+void World::integrateSubStep(double dt) {
+    // TASARIM: arac bos olmayan bir alana HAREKET EDEMEZ. Kisit sonradan
+    // onarimla degil, hareketin kaynaginda uygulanir; boylece "arac bir
+    // adimda ondekinin uzerinden gecer" durumu hicbir zaman olusmaz.
+    //
+    // Siralama: liste konuma gore AZALAN sirali -> liste[0] ONDEKI.
+    // Onden arkaya islenir; boylece ondekinin yeni konumu arkadakine
+    // dogru hesaplanir.
+    rebuildLaneIndex();
 
-            // Sifir uzunluklu serit (ornegin cikmaaz ucunun kavsaga olan
-            // komsu hucresi) zaman harcamaz, dogrudan gecilir.
-            if (lane.length <= 0.0) {
-                const AdvanceResult r = advanceLane(v);
-                if (r == AdvanceResult::Arrived) {
-                    metrics_.totalTravelTime += time_ - v.spawnTime;
-                    ++metrics_.arrived;
-                    vehicles_[i] = vehicles_.back();
-                    vehicles_.pop_back();
-                    --i;  // swap edilen araci bu dongude isleme
-                    kalanMesafe = 0.0;
-                    break;
-                }
-                if (r == AdvanceResult::Stuck) {
-                    v.speed = 0.0;
-                    kalanMesafe = 0.0;
-                    break;
-                }
+    std::vector<VehicleId> ulasanlar;
+
+    for (const auto& liste : laneVehicles_) {
+        if (liste.empty()) {
+            continue;
+        }
+        const Lane& lane = network_.lane(findVehicle(liste.front()).currentLane);
+
+        for (std::size_t k = 0; k < liste.size(); ++k) {
+            Vehicle& v = findVehicle(liste[k]);
+
+            // Bosluk: serit sonuna kadar, veya ondeki aracin arkasina kadar.
+            double bosluk = lane.length - v.position;
+            if (k > 0) {
+                const Vehicle& ondek = findVehicle(liste[k - 1]);
+                bosluk = std::min(bosluk, ondek.position - kVehicleLength - v.position);
+            }
+            bosluk = std::max(0.0, bosluk);
+
+            const double hareket = std::min(v.speed * dt, bosluk);
+            v.position += hareket;
+            v.totalDistance += hareket;
+
+            if (hareket <= 0.0) {
+                v.speed = 0.0;
+            }
+
+            // Serit sonuna ulasti mi? Sifir uzunluklu seritlerde bu
+            // kosul bastan dogrudur (arac aninda gecer).
+            if (v.position < lane.length - 1e-9) {
                 continue;
             }
 
-            const double seriIceriKalan = lane.length - v.position;
-
-            if (kalanMesafe < seriIceriKalan) {
-                v.position += kalanMesafe;   // seri icinde kaldi
-                kalanMesafe = 0.0;
-                break;
-            }
-
-            // Serinin sonuna ulasti: kalan mesafeyi bir sonraki seride harca.
-            kalanMesafe -= seriIceriKalan;
-            v.position = lane.length;
-
+            // Serit sonu: advanceLane hem SIRAYA GEÇIŞi hem de VARISI
+            // ele alir. Burada erken bir `continue` konulursa araç olasi
+            // gelis seridin sonunda kalici olarak durur (bu hata yasandi).
             const AdvanceResult r = advanceLane(v);
             if (r == AdvanceResult::Arrived) {
-                metrics_.totalTravelTime += time_ - v.spawnTime;
-                ++metrics_.arrived;
-                vehicles_[i] = vehicles_.back();
-                vehicles_.pop_back();
-                --i;
-                kalanMesafe = 0.0;
-                break;
-            }
-            if (r == AdvanceResult::Stuck) {
+                ulasanlar.push_back(v.id);
+            } else if (r == AdvanceResult::Stuck) {
+                // Giris yok (kavsak/kuyruk dolu): seridin sonunda bekle.
+                v.position = lane.length;
                 v.speed = 0.0;
-                v.position = 0.0;
-                kalanMesafe = 0.0;
-                break;
+                v.stopped = true;
             }
         }
     }
+
+    // Ulasan araclari olcumle ve kaldir.
+    for (const VehicleId id : ulasanlar) {
+        if (id.value >= vehicleIndex_.size()) {
+            continue;
+        }
+        const std::size_t idx = vehicleIndex_[id.value];
+        if (idx >= vehicles_.size() || vehicles_[idx].id != id) {
+            continue;
+        }
+        const Vehicle& v = vehicles_[idx];
+        metrics_.totalTravelTime += time_ - v.spawnTime;
+        metrics_.totalWaitTime += v.waitTime;
+        metrics_.waitTimeMeasured = true;
+        ++metrics_.arrived;
+
+        vehicles_[idx] = vehicles_.back();
+        vehicles_.pop_back();
+    }
+    vehicleIndex_.clear();
+    laneVehicles_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +596,20 @@ std::uint64_t World::digest() const {
     hashU64(h, driveRng_.state().state);
     hashU64(h, static_cast<std::uint64_t>(spawnCursor_));
     hashU64(h, nextVehicleCounter_);
+    // Sinyal durumlari da simülasyonun parcasidir: tekrarlanabilirlik icin
+    // ozete dahil edilmelidir.
+    for (const Intersection& j : intersections_) {
+        const auto st = j.snapshotState();
+        hashU64(h, static_cast<std::uint64_t>(st.phase));
+        hashU64(h, static_cast<std::uint64_t>(st.state));
+        hashDouble(h, st.phaseElapsed);
+        hashDouble(h, st.greenElapsed);
+        hashDouble(h, st.stateElapsed);
+        hashU64(h, st.switchCount);
+        hashU64(h, st.rejectedSwitches);
+        hashU64(h, st.forcedSwitches);
+        hashU64(h, st.switchRequested ? 1u : 0u);
+    }
     return h;
 }
 
@@ -310,6 +630,10 @@ Snapshot World::snapshot() const {
     s.driveRngInc = ds.inc;
     s.spawnCursor = spawnCursor_;
     s.nextVehicleCounter = nextVehicleCounter_;
+    s.junctionStates.reserve(intersections_.size());
+    for (const Intersection& j : intersections_) {
+        s.junctionStates.push_back(j.snapshotState());
+    }
     return s;
 }
 
@@ -321,6 +645,9 @@ void World::restore(const Snapshot& s) {
     driveRng_ = Rng::fromState(Rng::State{s.driveRngState, s.driveRngInc, seed_ ^ mix64(0x44524956'45ULL), Rng::kDefaultStream});
     spawnCursor_ = s.spawnCursor;
     nextVehicleCounter_ = s.nextVehicleCounter;
+    for (std::size_t i = 0; i < intersections_.size() && i < s.junctionStates.size(); ++i) {
+        intersections_[i].restoreState(s.junctionStates[i]);
+    }
 }
 
 }  // namespace tsc

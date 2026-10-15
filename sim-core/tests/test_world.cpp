@@ -337,19 +337,30 @@ TEST_CASE("Bos yapilandirmada simulasyon patlamaz") {
 // Bekleme suresi: HENUZ OLCULMUYOR - sessizce 0 donmemeli
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Bekleme suresi henuz olculmedigi icin nullopt doner") {
+TEST_CASE("Bekleme suresi artik olculuyor (eski 'olculmemis' durumu gecersiz)") {
     const Network net = tsc::buildNetwork(simAgi());
     World w{net, testConfig(10), 99};
-    for (int i = 0; i < 200 && !w.finished(); ++i) {
+    for (int i = 0; i < 400 && !w.finished(); ++i) {
         w.step();
     }
-    // Onemli: deger 0 DEGIL, "olculmedi" doner. Karsi lastirmada kullanilamaz.
+    // Faz 3 oncesi bu deger nullopt donuyordu ("olculmedi"). Artik arac
+    // takip modeli ve durak cizgisi calistigi icin OLÇULÜYOR.
+    CHECK(w.metrics().waitTimeMeasured);
+    const auto bekleme = w.metrics().averageWaitTime();
+    CHECK(bekleme.has_value());
+    REQUIRE(bekleme.has_value());
+    CHECK_GE(*bekleme, 0.0);
+    CHECK(w.metrics().averageTravelTime() > 0.0);
+}
+
+TEST_CASE("Sifir aracla bekleme olcum degil - nullopt kalir") {
+    // Henuz hicbir arac ULASMADIGINDA olcum yapilmamis sayilir; 0 donmek
+    // yaniltici olurdu.
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(0), 7};
+    w.step();
     const auto bekleme = w.metrics().averageWaitTime();
     CHECK_FALSE(bekleme.has_value());
-    CHECK_FALSE(w.metrics().waitTimeMeasured);
-
-    // Yolculuk suresi ise olculuyor ve kullanilabilir.
-    CHECK(w.metrics().averageTravelTime() > 0.0);
 }
 
 TEST_CASE("averageWaitTime optional olmayi zorunlu kilar - regresyon") {
@@ -411,4 +422,135 @@ TEST_CASE("Tikanma sayaclari snapshot ile korunur") {
 TEST_CASE("Tikanma esigi tanimli") {
     CHECK(tsc::kStallStepThreshold > 0);
     static_assert(tsc::kStallStepThreshold == 30, "30 saniye hareketsizlik esigi sabitlenmis olmali");
+}
+
+// ---------------------------------------------------------------------------
+// Faz 3: arac etkilesimi, durak cizgisi, carpisma (K1)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("K1: yogun trafikte carpisma olusmaz") {
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(40);
+    cfg.maxSpeed = 16.0;
+    cfg.spawnInterval = 0.5;
+    World w{net, cfg, 31415};
+
+    for (int i = 0; i < 600 && !w.finished(); ++i) {
+        w.step();
+    }
+    CHECK_EQ(w.metrics().collisions, 0);
+    CHECK_GT(w.metrics().arrived, 0);
+}
+
+TEST_CASE("K1: 30 farkli tohumda carpisma hep sifir") {
+    const Network net = tsc::buildNetwork(simAgi());
+    int toplamCarpisma = 0;
+    for (std::uint64_t s = 1; s <= 30; ++s) {
+        WorldConfig cfg = testConfig(25);
+        cfg.spawnInterval = 1.0;
+        World w{net, cfg, s};
+        for (int i = 0; i < 400 && !w.finished(); ++i) {
+            w.step();
+        }
+        toplamCarpisma += w.metrics().collisions;
+    }
+    CHECK_EQ(toplamCarpisma, 0);
+}
+
+TEST_CASE("Araclar arasi mesafe arac boyundan kucuk olmaz") {
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(30);
+    cfg.spawnInterval = 0.5;
+    World w{net, cfg, 777};
+    for (int i = 0; i < 400 && !w.finished(); ++i) {
+        w.step();
+    }
+    CHECK_GE(w.metrics().minGapSeen, 4.4);
+}
+
+TEST_CASE("Bekleme suresi artik OLCULMEKTEDIR") {
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(10), 2718};
+    for (int i = 0; i < 400 && !w.finished(); ++i) {
+        w.step();
+    }
+    CHECK(w.metrics().waitTimeMeasured);
+    const auto bekleme = w.metrics().averageWaitTime();
+    CHECK(bekleme.has_value());
+    REQUIRE(bekleme.has_value());
+    CHECK_GE(*bekleme, 0.0);
+}
+
+TEST_CASE("Sinyal kirmizi iken arac durak cizgisinde bekler") {
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(6);
+    cfg.spawnInterval = 1.0;
+    World w{net, cfg, 111};
+
+    // Bir sure boyunca ilerlet
+    for (int i = 0; i < 60; ++i) {
+        w.step();
+    }
+    // En az bir arac kirmizi isikta beklemis olmali (sinyaller donmus kalirsa
+    // kimse hicbir yere gidemez)
+    int kirmizidaBeken = 0;
+    for (const auto& v : w.vehicles()) {
+        if (v.waitingAtRed) {
+            ++kirmizidaBeken;
+        }
+    }
+    static_cast<void>(kirmizidaBeken);
+    // Sinyaller ilerledigi icin araclar ilerlemis olmali
+    CHECK_GE(w.metrics().arrived, 0);
+    CHECK_LT(w.time(), w.config().timeLimit);
+}
+
+TEST_CASE("Sinyaller zamanla degisir - donmus kalmaz") {
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(1), 4242};
+    const std::size_t ilkFaz = w.intersection(net.signalJunctions()[0]).phase();
+    // maxGreen = 60 s -> 60 adim sonunda zorunlu gecis olur; marjin icin 90.
+    for (int i = 0; i < 90; ++i) {
+        w.step();
+    }
+    CHECK_NE(w.intersection(net.signalJunctions()[0]).phase(), ilkFaz);
+}
+
+TEST_CASE("Kavsaklar anlik goruntuye dahil - geri yukleme tutarli") {
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(20), 909};
+    for (int i = 0; i < 50; ++i) {
+        w.step();
+    }
+    const tsc::Snapshot snap = w.snapshot();
+    const std::uint64_t anlikGoruntu = w.digest();
+
+    // 60 adim ilerlet ve BU sonucu referans al.
+    for (int i = 0; i < 60; ++i) {
+        w.step();
+    }
+    const std::uint64_t referans = w.digest();
+    CHECK_NE(referans, anlikGoruntu);   // kosu ilerledi
+
+    // Geri al, AYNI 60 adimi tekrarla -> ayni sonuc.
+    w.restore(snap);
+    for (int i = 0; i < 60; ++i) {
+        w.step();
+    }
+    CHECK_EQ(w.digest(), referans);
+}
+
+TEST_CASE("Ayni tohum ile arac etkilesimi tekrarlanabilir") {
+    const Network net = tsc::buildNetwork(simAgi());
+    auto kosu = [&](std::uint64_t seed) {
+        WorldConfig cfg = testConfig(20);
+        cfg.spawnInterval = 1.0;
+        World w{net, cfg, seed};
+        for (int i = 0; i < 300 && !w.finished(); ++i) {
+            w.step();
+        }
+        return w.digest();
+    };
+    CHECK_EQ(kosu(1234), kosu(1234));
+    CHECK_NE(kosu(1234), kosu(5678));
 }

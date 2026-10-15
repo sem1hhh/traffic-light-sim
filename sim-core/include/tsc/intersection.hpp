@@ -115,6 +115,26 @@ public:
     /// Bu kavsak iki fazli karsilikli kavsak mi? (K/G ve D/B kollari)
     bool isOpposingTwoPhase() const;
 
+    /// Sinyal atanmis kavsak mi? (kollari olan, aktif faz makinesi)
+    bool active() const noexcept { return !arms_.empty(); }
+
+    /// Anlik goruntu: tum faz sayaci ve istek bayragi.
+    /// Snapshot ve digest (tekrarlanabilirlik) icin gerekli.
+    struct State {
+        std::size_t phase = 0;
+        SignalState state = SignalState::Green;
+        double phaseElapsed = 0.0;
+        double greenElapsed = 0.0;
+        double stateElapsed = 0.0;
+        std::uint64_t switchCount = 0;
+        std::uint64_t rejectedSwitches = 0;
+        std::uint64_t forcedSwitches = 0;
+        bool switchRequested = false;
+    };
+
+    State snapshotState() const;
+    void restoreState(const State& s);
+
     /// Bir kol (yaklasma yonu) su anda gecmeye izin veriyor mu?
     bool hasGreen(Dir approachDir) const;
 
