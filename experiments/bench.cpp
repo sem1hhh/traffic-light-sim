@@ -61,17 +61,21 @@ RunResult runOnce(const Scenario& scenario, ControllerFactory factory, std::uint
     r.simSeconds = world.time();
     r.completed = world.complete();
     r.deadlocked = world.deadlocked();
+    r.switchRequests = driver.switchRequests();
     r.digest = world.digest();
     return r;
 }
 
 std::vector<RunResult> runMany(const Scenario& scenario, ControllerFactory factory,
-                               int seedCount, std::uint64_t firstSeed) {
+                               int seedCount, const std::string& label,
+                               std::uint64_t firstSeed) {
     std::vector<RunResult> out;
     out.reserve(static_cast<std::size_t>(seedCount));
     for (int i = 0; i < seedCount; ++i) {
         RunResult r = runOnce(scenario, factory, firstSeed + static_cast<std::uint64_t>(i));
-        r.controller = scenario.name;   // "load=<rejim>"; etiket runOnce icinde atanir
+        // Etiket burada yazilir; runOnce bilmez (kosu motoru etiketle ilgilenmez).
+        r.controller = label;
+        static_cast<void>(label);
         out.push_back(r);
     }
     return out;

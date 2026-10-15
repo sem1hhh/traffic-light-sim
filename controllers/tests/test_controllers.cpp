@@ -502,3 +502,70 @@ TEST_CASE("Sabit zamanli kontrolcu TAM OLARAK plan suresi kadar yesil verir") {
     INFO("plan suresi=" << plan[0] << " -> beklenen " << beklenen << " adim, gerceklesen " << adim);
     CHECK_EQ(adim, static_cast<int>(beklenen));
 }
+
+// ---------------------------------------------------------------------------
+// Azami yesil: iki katmanin ayni kurali
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Azami yesil kavsagin KENDI suresinden turetilir") {
+    // Faz 5'teki hata: kontrolcu maxGreen=25, Intersection maxGreen=20.
+    // Kavsak 20'de zaten zorunlu gecis yaptigi icin kontrolcunun kurali
+    // HICBIR KOSULDA TETIKLENMEDI — olcumde "azami yesilli esik kontrolcusu"
+    // denmesi yanlislikti.
+    //
+    // Artik varsayilan 0 (= "kendin ayarlama") ve gercek sinir
+    // Intersection'in suresinden turer.
+    ThresholdRuleController c;   // varsayilan: maxGreen = 0
+
+    Intersection j20 = yapKavsak(20.0);
+    Intersection j60 = yapKavsak(60.0);
+
+    const double e20 = c.effectiveMaxGreen(observe(j20));
+    const double e60 = c.effectiveMaxGreen(observe(j60));
+
+    // Her iki durumda da Intersection'in ZORUNLU gecisinden ONCE olmali.
+    CHECK_LT(e20, 20.0);
+    CHECK_LT(e60, 60.0);
+    // Kavramin kendisi orantili olmali.
+    CHECK_NEAR_T(e60 / e20, 3.0, 1e-9);
+    // Varsayilan faktor 0.85.
+    CHECK_NEAR_T(e20, 17.0, 1e-9);
+}
+
+TEST_CASE("Esik kontrolcusu, kavsagin ZORUNLU gecisinden ONCE gecer") {
+    // En onemli davranis: karar kontrolcunun olmali. Intersection de ayni
+    // kuralli sahiptir; kontrolcu onu once kullanir.
+    Intersection j = yapKavsak(30.0);   // Intersection 30'da zorlar
+    ThresholdRuleController c;          // kontrolcu 25.5'te gecmeli (0.85*30)
+
+    // Mevcut faz dolu, diger bos -> kural 1 ve 2 tetiklenmez.
+    j.setQueue(Dir::North, 9);
+    j.setQueue(Dir::South, 9);
+    j.setQueue(Dir::East, 0);
+    j.setQueue(Dir::West, 0);
+
+    int istekAdimi = -1;
+    for (int i = 0; i < 40; ++i) {
+        j.step(1.0);
+        if (c.decide(observe(j)) == Action::Switch) {
+            istekAdimi = i;
+            break;
+        }
+    }
+    REQUIRE(istekAdimi >= 0);
+    // minGreen (5) sonrasi, Intersection'in zorlamasi (30) oncesi.
+    CHECK_GT(istekAdimi, 4);
+    CHECK_LT(istekAdimi, 30);
+    // Faz HENUZ degismemis olmali: gecis sadece ISTENDI.
+    CHECK_EQ(static_cast<int>(observe(j).phase), 0);
+}
+
+TEST_CASE("Esik kontrolcusu: acik maxGreen kavramin ustune cikar") {
+    // Mutlak deger verilirse onun yerine kullanilir.
+    ThresholdRuleController::Params p;
+    p.maxGreen = 40.0;
+    ThresholdRuleController c{p};
+    Intersection j = yapKavsak(20.0);
+    // 20 * 0.85 = 17 degil, verilen 40 kullanilir.
+    CHECK_NEAR_T(c.effectiveMaxGreen(observe(j)), 40.0, 1e-12);
+}

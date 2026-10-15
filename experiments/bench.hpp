@@ -49,6 +49,10 @@ struct RunResult {
     double simSeconds = 0.0;
     bool completed = false;
     bool deadlocked = false;
+    /// Kontrolcunun toplam gecis ISTEK sayisi (kabul edilenler dahil).
+    /// Kontrolcunun davranisini anlatmanin en dogrudan yolu: kac kez
+    /// gecis istedi. Rapor tablosuna eklenebilir.
+    std::uint64_t switchRequests = 0;
     std::uint64_t digest = 0;
 };
 
@@ -59,8 +63,13 @@ using ControllerFactory = std::function<std::unique_ptr<IController>(JunctionId)
 RunResult runOnce(const Scenario& scenario, ControllerFactory factory, std::uint64_t seed);
 
 /// Bir kontrolcuyu N tohumla calistir.
+///
+/// `label` sonuc kosularina yazilir (orn. "kural-esikli"). `scenario.name`
+/// YALNIZCA senaryonun kendi adidir ve sonuclarda kullanilmaz; karistirmamak
+/// icin burada acikca verilir.
 std::vector<RunResult> runMany(const Scenario& scenario, ControllerFactory factory,
-                               int seedCount, std::uint64_t firstSeed = 1);
+                               int seedCount, const std::string& label,
+                               std::uint64_t firstSeed = 1);
 
 }  // namespace bench
 }  // namespace tsc

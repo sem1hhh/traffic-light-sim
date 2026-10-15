@@ -31,18 +31,36 @@ public:
     struct Params {
         int switchThreshold = 1;      ///< alti: mevcut faz "bos" sayilir
         int urgentThreshold = 4;      ///< ustu: sıradaki faz "acik" sayilir
-        double maxGreen = 25.0;       ///< azami yesil; asilirsa gecis ZORUNLU
         int pressureMargin = 3;       ///< kuyruk farki bu kadarı büyükse gec
+
+        /// Azami yesil suresi. 0 ise DEGER KULLANILMAZ; bunun yerine
+        /// kavsagin kendi `maxGreen` suresinin `maxGreenFactor` katı uygulanir.
+        ///
+        /// NEDEN BÖYLE: Azami yesil, iki katmanin ayni kurali olmasidir —
+        /// Intersection'ta da vardir ve orada ZORUNLUDUR. Kontrolcu 25 s,
+        /// Intersection 20 s ise kavsak 20'de gecer ve kontrolcunun kurali
+        /// HICBIR KOSULDA TETIKLENMEZ; olcumde "azami yesilli esik
+        /// kontrolcusu" denmesi yanlislik olurdu. (Faz 5'te boyle bir
+        /// parametre vardi ve bench kosularinda olu koddu.)
+        ///
+        /// Fakturun 1'in altinda olmasi bilincli: gecis kararini kontrolcu
+        /// vermelidir, Intersection'in zorlamasina birakilmamalidir.
+        double maxGreen = 0.0;
+        double maxGreenFactor = 0.85;
     };
 
     ThresholdRuleController() = default;
     explicit ThresholdRuleController(Params params) : params_(params) {}
 
-    void onReset() override { cagri_ = 0; gecenSure_ = 0.0; }
+    void onReset() override { cagri_ = 0; }
 
     Action decide(const SignalObservation& obs) override;
 
     const Params& params() const noexcept { return params_; }
+
+    /// Bu kavsak icin gecerli azami yesil suresi. KAMU alaninda: kural
+    /// katsayinin ne anlama geldigi disaridan da gorunmelidir.
+    double effectiveMaxGreen(const SignalObservation& obs) const;
 
     std::uint64_t callCount() const noexcept { return cagri_; }
 
@@ -53,7 +71,6 @@ private:
 
     Params params_;
     std::uint64_t cagri_ = 0;
-    double gecenSure_ = 0.0;   ///< mevcut fazda gecen sure (azami yesil icin)
 };
 
 }  // namespace tsc

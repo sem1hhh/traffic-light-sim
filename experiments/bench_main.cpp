@@ -156,10 +156,13 @@ bench::ControllerFactory fixedFactory() {
     };
 }
 
-bench::ControllerFactory thresholdFactory(int esik, int acilEsik) {
-    return [esik, acilEsik](JunctionId) -> std::unique_ptr<IController> {
-        return std::make_unique<ThresholdRuleController>(
-            ThresholdRuleController::Params{esik, acilEsik});
+/// Kural tabanli kontrolcu. Azami yesil suresi BURADA verilmez: kontrolcu
+/// kavsagin kendi `maxGreen`'inden turetir (bkz. ThresholdRuleController::Params).
+/// Vermek, olcumde "azami yesilli" yazmamiza raomen o kuralin olcumde
+/// tetiklenmemis olmasi demekti.
+bench::ControllerFactory thresholdFactory() {
+    return [](JunctionId) -> std::unique_ptr<IController> {
+        return std::make_unique<ThresholdRuleController>();
     };
 }
 
@@ -179,8 +182,9 @@ void printSummary(const std::map<std::string, std::vector<RunResult>>& runs) {
     std::cout << std::left << std::setw(16) << "kontrolcu" << std::setw(5) << "n"
               << std::setw(19) << "yolculuk (s)" << std::setw(19) << "bekleme (s)"
               << std::setw(19) << "ort. kuyruk" << std::setw(11) << "tamamlanan"
+              << std::setw(11) << "gridlock" << std::setw(13) << "ort. gecis"
               << std::setw(10) << "carpisma" << "\n";
-    std::cout << std::string(99, '-') << "\n";
+    std::cout << std::string(113, '-') << "\n";
 
     for (const auto& [name, rs] : runs) {
         if (rs.empty()) continue;
@@ -202,12 +206,22 @@ void printSummary(const std::map<std::string, std::vector<RunResult>>& runs) {
             os << std::fixed << std::setprecision(2) << mean << " +/- " << sd;
             return os.str();
         };
+        int kilitli = 0;
+        double gecisOrt = 0.0;
+        for (const RunResult& r : rs) {
+            if (r.deadlocked) ++kilitli;
+            gecisOrt += static_cast<double>(r.switchRequests);
+        }
+        gecisOrt /= static_cast<double>(rs.size());
         std::ostringstream tam;
         tam << done << "/" << rs.size();
+        std::ostringstream gec;
+        gec << std::fixed << std::setprecision(1) << gecisOrt;
         std::cout << std::left << std::setw(16) << name << std::setw(5) << rs.size()
                   << std::setw(19) << hucre(t.mean, t.sd) << std::setw(19)
                   << hucre(w.mean, w.sd) << std::setw(19) << hucre(q.mean, q.sd)
-                  << std::setw(11) << tam.str() << std::setw(10) << coll << "\n";
+                  << std::setw(11) << tam.str() << std::setw(11) << kilitli
+                  << std::setw(13) << gec.str() << std::setw(10) << coll << "\n";
     }
 }
 
@@ -223,6 +237,13 @@ void printComparisons(const std::map<std::string, std::vector<RunResult>>& runs,
               << " (eslestirilmis t-testi, yolculuk suresi) ===\n";
     std::cout << "kontrolcu ile " << kontrolGrubu << " arasindaki ORTALAMA FARK negatifse,\n"
               << "yani sure KISALDIYSA, kontrolcu daha iyidir.\n\n";
+    // Kucuk orneklemde t-testi ispat gucu zayiftir. Bunu soylemek, sonucu
+    // oldugundan guclu gostermekten iyidir.
+    if (ref.size() < 10) {
+        std::cout << "\n[UYARI] Yalnizca " << ref.size() << " tohum kullanildi. "
+                  << "Guven araligi genis, p degeri guvenilmezdir; "
+                  << "rapor icin en az 30 tohum onerilir.\n";
+    }
     std::cout << std::left << std::setw(16) << "kontrolcu" << std::setw(14) << "ort. fark (s)"
               << std::setw(10) << "t" << std::setw(9) << "p" << std::setw(20)
               << "%95 guven arligi" << std::setw(14) << "sonuc" << "\n";
@@ -245,7 +266,7 @@ void printComparisons(const std::map<std::string, std::vector<RunResult>>& runs,
     }
 }
 
-void writeCsv(const std::string& dir, const std::map<std::string, std::vector<RunResult>>& runs) {
+void writeCsv(const std::string& dir, const std::vector<RunResult>& runs) {
     // Klasoru ac (deney sirasinda hata verip durmasin diye).
     const std::string cmd = "mkdir -p '" + dir + "'";
     if (std::system(cmd.c_str()) != 0) {
@@ -258,18 +279,21 @@ void writeCsv(const std::string& dir, const std::map<std::string, std::vector<Ru
         std::cerr << "UYARI: CSV acilamadi: " << path << "\n";
         return;
     }
-    f << "controller,seed,average_travel_time,average_wait_time,arrived,spawned,"
+    f << "load,controller,seed,average_travel_time,average_wait_time,arrived,spawned,"
          "average_system_count,average_queue,max_queue,collisions,sim_seconds,completed,"
-         "deadlocked,digest\n";
+         "deadlocked,switch_requests,digest\n";
     f << std::fixed << std::setprecision(6);
-    for (const auto& [name, rs] : runs) {
-        for (const RunResult& r : rs) {
-            f << name << ',' << r.seed << ',' << r.averageTravelTime << ',' << r.averageWaitTime
-              << ',' << r.arrived << ',' << r.spawned << ',' << r.averageSystemCount << ','
-              << r.averageQueue << ',' << r.maxQueue << ',' << r.collisions << ',' << r.simSeconds
-              << ',' << (r.completed ? 1 : 0) << ',' << (r.deadlocked ? 1 : 0) << ',' << r.digest
-              << '\n';
-        }
+    for (const RunResult& r : runs) {
+        // "kontrolcu@rejim" etiketi iki parcaya ayrilir: sutunlar ayri ayri
+        // olca rapor tablosu filtrelenebilir.
+        const std::size_t at = r.controller.find('@');
+        f << (at == std::string::npos ? std::string("") : r.controller.substr(at + 1)) << ','
+          << (at == std::string::npos ? r.controller : r.controller.substr(0, at)) << ','
+          << r.seed << ',' << r.averageTravelTime << ',' << r.averageWaitTime << ','
+          << r.arrived << ',' << r.spawned << ',' << r.averageSystemCount << ','
+          << r.averageQueue << ',' << r.maxQueue << ',' << r.collisions << ','
+          << r.simSeconds << ',' << (r.completed ? 1 : 0) << ',' << (r.deadlocked ? 1 : 0)
+          << ',' << r.switchRequests << ',' << r.digest << '\n';
     }
     std::cout << "\nCSV yazildi: " << path << "\n";
 }
@@ -296,7 +320,7 @@ int main(int argc, char** argv) {
     // KONTROL GRUBU ilk sirada: karsilastirma referansi odur.
     const std::vector<Entry> kontroller{
         {"sabit-zamanli", fixedFactory()},
-        {"kural-esikli", thresholdFactory(3, 5)},
+        {"kural-esikli", thresholdFactory()},
     };
 
     std::cout << "=== TRAFIK ISIGI KONTROLU KARSILASTIRMASI ===\n"
@@ -305,8 +329,10 @@ int main(int argc, char** argv) {
               << "Maks   : " << opt.hours << " s\n"
               << "Rejim  : " << opt.load << "\n";
 
-    // Tum kosular tek CSV'ye yazilir; rejim sutunuyla ayrilir.
-    std::map<std::string, std::vector<RunResult>> tumKosular;
+    // Tum kosular TEK duz listeye yazilir; rejim, kontrolcu etiketinin
+    // icinde tasinir ve CSV'de ayri sutun olur. (map kullanmak tohumu
+    // etiketin parcasina katistiriyordu: load sutunu "light/1" oluyordu.)
+    std::vector<RunResult> tumKosular;
 
     for (const LoadProfile& lp : profiller) {
         Scenario sc;
@@ -322,12 +348,13 @@ int main(int argc, char** argv) {
         std::map<std::string, std::vector<RunResult>> runs;
         for (const Entry& e : kontroller) {
             std::cout << "  " << e.name << " (" << opt.seeds << " tohum)... " << std::flush;
-            std::vector<RunResult> rs = runMany(sc, e.factory, opt.seeds);
+            std::vector<RunResult> rs =
+                runMany(sc, e.factory, opt.seeds, e.name);
             // CSV etiketi rejimi tasi: ayni kontrolcu farkli rejimlerde
             // farkli sonuc verir, tek isimde kaybolurlardi.
             for (RunResult& r : rs) {
                 r.controller = std::string(e.name) + "@" + lp.name;
-                tumKosular[r.controller + "/" + std::to_string(r.seed)].push_back(r);
+                tumKosular.push_back(r);
             }
             runs[e.name] = std::move(rs);
             std::cout << "tamam\n";

@@ -10,6 +10,16 @@ int ThresholdRuleController::nextPhaseQueue(const SignalObservation& obs) {
     return diger;
 }
 
+double ThresholdRuleController::effectiveMaxGreen(const SignalObservation& obs) const {
+    if (params_.maxGreen > 0.0) {
+        return params_.maxGreen;
+    }
+    // Kavsagin kendi azami yesilinin bir kismi. Intersection ayni zamanda
+    // kendi maxGreen'inde zorunlu gecis yapar; fakturu 1'in altinda
+    // tutarak karari kontrolcuda birakiriz.
+    return obs.timing.maxGreen * params_.maxGreenFactor;
+}
+
 Action ThresholdRuleController::decide(const SignalObservation& obs) {
     ++cagri_;
 
@@ -24,7 +34,7 @@ Action ThresholdRuleController::decide(const SignalObservation& obs) {
 
     // Azami yesil asildiysa gecis ZORUNLUDUR: kurala bakmaz.
     // (Intersection yine de guvenlik kurallarina uyacaktir.)
-    if (obs.greenElapsed >= params_.maxGreen) {
+    if (obs.greenElapsed >= effectiveMaxGreen(obs)) {
         return Action::Switch;
     }
 
