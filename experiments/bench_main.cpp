@@ -177,6 +177,23 @@ std::vector<double> column(const std::vector<RunResult>& rs, double RunResult::*
     return v;
 }
 
+/// Bekleme sutunu — OLCELMEMIS degerler (-1.0 isareti) ELLENIR.
+///
+/// Neden: `averageWaitTime` hic arac varmadiginda -1.0 doner. O deger
+/// describe() ortalamasina karissaydi ortalamayi asagi cekerdi: yani en
+/// KOTU kosul, EN IYI bekleme suresini uretirdi (BULGU 2 ile ayni tuzak).
+/// Artik ortalama yalnizca GERCEKTEN olculmus kosularin ortalamasidir.
+std::vector<double> beklemeColumn(const std::vector<RunResult>& rs) {
+    std::vector<double> v;
+    v.reserve(rs.size());
+    for (const RunResult& r : rs) {
+        if (r.averageWaitTime >= 0.0) {   // -1.0 isareti ele
+            v.push_back(r.averageWaitTime);
+        }
+    }
+    return v;
+}
+
 /// Sansur (censoring) uyarisi: zaman asiminda kalan araclar `averageTravelTime`
 /// hesabina GIRMEZ. Iki kontrolcunun bitirme orani farkliysa karsilastirma
 /// esitsizdir: daha cok gridlock yapan kontrolcu, daha IYI gorunen bir
@@ -227,7 +244,8 @@ void printSummary(const std::map<std::string, std::vector<RunResult>>& runs) {
         // Sansursuz metrik: sistemde kalan araclari da sayar.
         const auto ts = describe(column(rs, &RunResult::averageTimeInSystem));
         const auto fr = describe(column(rs, &RunResult::arrivedFraction));
-        const auto w = describe(column(rs, &RunResult::averageWaitTime));
+        // -1.0 isareti ele; ortalama yalnizca GERCEKTEN olculmus kosulda.
+        const auto w = describe(beklemeColumn(rs));
         const auto q = describe(column(rs, &RunResult::averageQueue));
         int done = 0;
         int coll = 0;

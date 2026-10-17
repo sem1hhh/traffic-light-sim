@@ -957,3 +957,38 @@ TEST_CASE("Bos dunyada oran ve sure sifirdir") {
     CHECK_NEAR_EPS(w.metrics().arrivedFraction(), 0.0);
     CHECK_NEAR_EPS(w.averageTimeInSystem(), 0.0);
 }
+
+// ---------------------------------------------------------------------------
+// "Olculmedi" ile "SIFIR" ayirimi — denetim.md BULGU 2 (iliskili tuzak)
+//
+// `averageWaitTime()` eskiden `arrived == 0` iken 0.0 donuyordu. Yani EN
+// KOTU kosul (hic kimse varamadi), EN IYI bekleme suresini raporlardi.
+//
+// NOT: Simulasyon icinde bu duruma su an ULAŞILAMIYOR — `waitTimeMeasured`
+// yalnizca arac ulastiginda true oluyor. Yani dal simdi "olu kod". Ama
+// invariant gerekli: bekleme suresi ARACTAN degil, VARISTAN olculdugu icin
+// ileride (orn. sansur duzeltilirken) bu kombinasyon erisilebilir olur.
+// Bu test fonksiyonu DOGDAN dogrular; boylece invariant kirilirsa yakalanir.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Varis yoksa bekleme suresi 0.0 degil OLCELMEMISTIR") {
+    tsc::Metrics m;
+    m.waitTimeMeasured = true;   // bekleme olcum baslatilmis
+    m.arrived = 0;               // ama HICBIR arac varamamis
+    m.totalWaitTime = 0.0;
+
+    // 0.0 donseydi "bekleme yok" sanilirdi; oysa olcum yapilmamistir.
+    const auto v = m.averageWaitTime();
+    CHECK_FALSE(v.has_value());
+    CHECK(v == std::nullopt);
+}
+
+TEST_CASE("Varis varsa bekleme suresi toplami/varan sayisidir") {
+    tsc::Metrics m;
+    m.waitTimeMeasured = true;
+    m.arrived = 4;
+    m.totalWaitTime = 40.0;
+    const auto v = m.averageWaitTime();
+    REQUIRE(v.has_value());
+    CHECK_NEAR_EPS(*v, 10.0);
+}

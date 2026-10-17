@@ -167,12 +167,14 @@ struct Metrics {
     }
 
     /// Bekleme suresi: Faz 3'te OLÇÜLMEYE BAŞLANDI.
+    ///
+    /// `arrived == 0` iken `nullopt` döner, 0.0 DEĞİL. 0.0 dönmüş olsaydı
+    /// **en kötü** koşul (hiç kimse varamadı) **en iyi** bekleme süresini
+    /// raporlamış olurdu — §8.5'teki "ölçülmedi ≠ sıfır" tuzağının kendisi.
+    /// (denetim.md BULGU 2, ilişkili tuzak)
     std::optional<double> averageWaitTime() const noexcept {
-        if (!waitTimeMeasured) {
+        if (!waitTimeMeasured || arrived == 0) {
             return std::nullopt;
-        }
-        if (arrived == 0) {
-            return std::optional<double>{0.0};
         }
         return std::optional<double>{totalWaitTime / static_cast<double>(arrived)};
     }
