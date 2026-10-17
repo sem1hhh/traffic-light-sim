@@ -36,6 +36,8 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -244,59 +246,121 @@ int main(int argc, char** argv) {
         os << std::fixed << std::setprecision(2) << d.mean << " +/- " << d.sd;
         return os.str();
     };
-
-    std::cout << "\n--- OZET ---\n";
-    std::cout << std::left << std::setw(20) << "kontrolcu" << std::setw(20)
-              << "yolculuk (s)" << "\n" << std::string(40, '-') << "\n";
-    std::cout << std::left << std::setw(20) << "q-learning" << std::setw(20)
-              << cell(qSure) << "\n";
-    std::cout << std::left << std::setw(20) << "sabit-zamanli" << std::setw(20)
-              << cell(sabitSure) << "\n";
-    std::cout << std::left << std::setw(20) << "kural-esikli" << std::setw(20)
-              << cell(kuralSure) << "\n";
-
-    std::cout << "\n--- KARSILASTIRMA (karsi referans: sabit-zamanli) ---\n";
-    std::cout << "kontrolcu ile sabit-zamanli arasindaki ORTALAMA FARK negatifse,\n"
-              << "yani sure KISALDIYSA, kontrolcu daha iyidir.\n\n";
-    std::cout << std::left << std::setw(20) << "kontrolcu" << std::setw(14)
-              << "ort. fark (s)" << std::setw(10) << "t" << std::setw(9) << "p"
-              << std::setw(20) << "%95 guven arligi" << std::setw(14) << "sonuc" << "\n";
-    std::cout << std::string(87, '-') << "\n";
-
-    for (const auto& [ad, v] : {std::pair<std::string, const std::vector<double>*>{"q-learning", &qSure},
-                                std::pair<std::string, const std::vector<double>*>{"kural-esikli", &kuralSure}}) {
-        const PairedTResult res = pairedTTest(*v, sabitSure);
-        std::ostringstream fark;
-        fark << std::fixed << std::setprecision(2) << res.meanDiff;
-        std::ostringstream t;
-        std::ostringstream ci;
-        std::string sonuc;
-        if (res.degenerate) {
-            // Varyans tahmini yok: t, p ve aralik TANIMDIR. "fark yok" demek
-            // yanlis olurdu — olcum yapilamadi, etki yok DEGIL. (BULGU 3)
-            t << "n/a";
-            ci << "n/a";
-            sonuc = "TANIMSIZ";
-        } else {
-            t << std::fixed << std::setprecision(2) << res.tStat;
-            ci << std::fixed << std::setprecision(1) << "[" << res.ciLow << ", " << res.ciHigh
-               << "]";
-            sonuc = res.significant() ? (res.meanDiff < 0.0 ? "DAHA IYI" : "DAHA KOTU")
-                                      : "fark yok";
+    auto oran = [](const std::vector<int>& tam) {
+        int n = 0;
+        for (const int x : tam) {
+            n += x;
         }
-        std::cout << std::left << std::setw(20) << ad << std::setw(14) << fark.str()
-                  << std::setw(10) << t.str() << std::setw(9) << formatP(res.pTwoSided)
-                  << std::setw(20) << ci.str() << std::setw(14) << sonuc << "\n";
+        std::ostringstream os;
+        os << n << "/" << tam.size();
+        return os.str();
+    };
+    // !! BULGU 2 — sansur !!
+    //
+    // "yolculuk (s)" yalnizca VARAN araclari sayar. Zaman asiminda kalan
+    // (gridlock) araclar hesaba hic girmez; boylece daha cok gridlock yapan
+    // kontrolcu daha IYI gorunur. Bu nedenle KARSILASTIRMA artik iki tablo
+    // halinde basiliyor ve hangisinin esas oldugu asagida yaziliyor.
+    std::cout << "\n--- OZET ---\n";
+    std::cout << std::left << std::setw(20) << "kontrolcu" << std::setw(24)
+              << "yolculuk (s, sansurlu)" << std::setw(24) << "sistemde (s, sansursuz)"
+              << std::setw(14) << "biten kosu" << "\n" << std::string(82, '-') << "\n";
+    for (const auto& [ad, sure, sistem, biten] :
+         {std::tuple<const char*, const std::vector<double>*, const std::vector<double>*,
+                     const std::vector<int>*>{"q-learning", &qSure, &ev.qSystem, &ev.qCompleted},
+          std::tuple<const char*, const std::vector<double>*, const std::vector<double>*,
+                     const std::vector<int>*>{"sabit-zamanli", &sabitSure, &ev.fixedSystem,
+                                              &ev.fixedCompleted},
+          std::tuple<const char*, const std::vector<double>*, const std::vector<double>*,
+                     const std::vector<int>*>{"kural-esikli", &kuralSure, &ev.ruleSystem,
+                                              &ev.ruleCompleted}}) {
+        std::cout << std::left << std::setw(20) << ad << std::setw(24) << cell(*sure)
+                  << std::setw(24) << cell(*sistem) << std::setw(14) << oran(*biten) << "\n";
     }
 
-    // --- GUC UYARISI -------------------------------------------------------
+    auto karsilastir = [&](const char* baslik, const std::vector<double>& ref,
+                           const std::vector<std::pair<const char*, const std::vector<double>*>>&
+                               digerleri) {
+        std::cout << "\n--- " << baslik << " (karsi referans: sabit-zamanli) ---\n";
+        std::cout << "kontrolcu ile sabit-zamanli arasindaki ORTALAMA FARK negatifse,\n"
+                  << "yani sure KISALDIYSA, kontrolcu daha iyidir.\n\n";
+        std::cout << std::left << std::setw(20) << "kontrolcu" << std::setw(14)
+                  << "ort. fark (s)" << std::setw(10) << "t" << std::setw(9) << "p"
+                  << std::setw(20) << "%95 guven arligi" << std::setw(14) << "sonuc" << "\n";
+        std::cout << std::string(87, '-') << "\n";
+
+        for (const auto& [ad, v] : digerleri) {
+            const PairedTResult res = pairedTTest(*v, ref);
+            std::ostringstream fark;
+            fark << std::fixed << std::setprecision(2) << res.meanDiff;
+            std::ostringstream t;
+            std::ostringstream ci;
+            std::string sonuc;
+            if (res.degenerate) {
+                // Varyans tahmini yok: t, p ve aralik TANIMDIR. "fark yok" demek
+                // yanlis olurdu — olcum yapilamadi, etki yok DEGIL. (BULGU 3)
+                t << "n/a";
+                ci << "n/a";
+                sonuc = "TANIMSIZ";
+            } else {
+                t << std::fixed << std::setprecision(2) << res.tStat;
+                ci << std::fixed << std::setprecision(1) << "[" << res.ciLow << ", "
+                   << res.ciHigh << "]";
+                sonuc = res.significant() ? (res.meanDiff < 0.0 ? "DAHA IYI" : "DAHA KOTU")
+                                          : "fark yok";
+            }
+            std::cout << std::left << std::setw(20) << ad << std::setw(14) << fark.str()
+                      << std::setw(10) << t.str() << std::setw(9) << formatP(res.pTwoSided)
+                      << std::setw(20) << ci.str() << std::setw(14) << sonuc << "\n";
+        }
+    };
+
+    karsilastir("KARSILASTIRMA A — yolculuk suresi (SANSURLU, yalnizca varanlar)", sabitSure,
+                {{"q-learning", &qSure}, {"kural-esikli", &kuralSure}});
+    karsilastir("KARSILASTIRMA B — sistemde kalis suresi (SANSURSUZ, her arac)", ev.fixedSystem,
+                {{"q-learning", &ev.qSystem}, {"kural-esikli", &ev.ruleSystem}});
+
+    // Hangi tablo esastir? Biten kosum orani farkliysa A TABLOSU GUVENILMEZDIR.
+    auto bitenYuzde = [](const std::vector<int>& tam) {
+        int n = 0;
+        for (const int x : tam) {
+            n += x;
+        }
+        return static_cast<double>(n) / static_cast<double>(tam.size());
+    };
+    const double enDusuk = std::min({bitenYuzde(ev.qCompleted), bitenYuzde(ev.fixedCompleted),
+                                     bitenYuzde(ev.ruleCompleted)});
+    const double enYuksek = std::max({bitenYuzde(ev.qCompleted), bitenYuzde(ev.fixedCompleted),
+                                      bitenYuzde(ev.ruleCompleted)});
+    if (enYuksek - enDusuk > 0.05) {
+        std::cout << "\n[SANSUR UYARISI] Biten kosum orani kontrolculer arasinda %5'ten fazla\n"
+                  << "  farkli. KARSILASTIRMA A yalnizca VARAN araclari saydigi icin\n"
+                  << "  GUVENILMEZDIR; yorum icin KARSILASTIRMA B (sansursuz) esastir.\n";
+    }
+
+    // --- YORUM NOTLARI -------------------------------------------------------
     //
-    // ILK KOSULARDA degerlendirme 30 tohumdu ve HICBIR rejimde fark
-    // anlamli cikmadi; "Q-learning sabit zamanliyi gecmiyor" sonucu
-    // cikarildi. YANLIS SONUCLUYDU: 30 cift gozlemde gozlenen etki
-    // buyuklugune karsil %80 guc ancak ~%45 idi.
+    // 1) KUCUK ORNEKLEM. 30 tohumla "hicbir rejimde anlamlı fark yok" denmis,
+    //    bu YANLIS SONUCLUYDU: 30 cift gozlemde gozlenen etki buyuklugune
+    //    karsil %80 guc ancak ~%45 idi. "Anlamli degil" ile "fark yok"
+    //    AYNI SEY DEGILDIR: ilki gucun yetersiz oldugunu anlatir.
     //
-    // 150 tohumde: light p<0.001, medium p<0.001, saturated p=0.64.
+    // 2) SANSUR (bu dosyada KARSILASTIRMA A ve B olarak basiliyor). "yolculuk"
+    //    yalnizca VARAN araclari sayar; takilan araclar hesaba girmez. 150
+    //    tohum olcumunde iki tablo REJIME GORE ZIT YONDE SONUC VERDI:
+    //      light      A: Q daha iyi (p<0.001)   B: fark yok (p=0.308)
+    //      medium     A: fark yok (p=0.224)     B: sabit daha iyi (p=0.006)
+    //      saturated  A: Q daha iyi (p<0.001)   B: sabit daha iyi (p=0.001)
+    //    Yani "Q-learning daha iyi mi" sorusunun cevabi, olcum aracina gore
+    //    DEGISIYOR. Sansursuz metrik B'dir; A, takilan araclari hic
+    //    goremedigi icin zaman siniri artirilsa bile DEGIMEZ (900/1800/3600
+    //    s'de birebir ayni cikti — bu, arac gorunmezliginin kendisidir).
+    //
+    // 3) SANSURDAN BAGIMSIZ ucuncu goz: bitirme orani. Q-learning UC rejimde
+    //    de sabit zamanlidan AZ bitirdi (138/150 karsi 141/150; 101 karsi
+    //    115; 32 karsi 45). McNemar: medium p=0.038, saturated p=0.015 —
+    //    sabit zamanli GERCEKTEN daha cok bitiriyor. Bu sayim ortalamaya
+    //    degil "hangi kosu bitti"ye bakar; sansur etkilemez.
     //
     // "Anlamli degil" ile "fark yok" AYNI SEY DEGILDIR. Ilki gucun
     // yetersiz oldugunu, ikincisi etkinin olmadigini anlatir.
