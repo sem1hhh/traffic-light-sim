@@ -49,7 +49,12 @@ struct EpisodeResult {
 /// Bir bölümün çıktısı.
 struct EpisodeOutcome {
     double averageTravelTime = 0.0;
+    /// Sansursuz: sistemde kalan araclari da sayar. Gridlock kosumunda bu
+    /// deger yolculuk suresinden buyuk cikar; fark, sansurun boyutudur.
+    double averageTimeInSystem = 0.0;
     double averageQueue = 0.0;
+    int arrived = 0;
+    int spawned = 0;
     int completed = 0;
     std::uint64_t switchRequests = 0;
 };
@@ -93,6 +98,16 @@ struct EvaluationRun {
     std::vector<double> qTravel;      ///< Q-learning yolculuk sureleri (s)
     std::vector<double> fixedTravel;  ///< sabit zamanli yolculuk sureleri
     std::vector<double> ruleTravel;   ///< kural esikli yolculuk sureleri
+    /// Ayni siralama, SANSURSUZ metrikle. Karsilastirma bununla yapilmalidir:
+    /// `*Travel` yalnizca varan araclari sayar ve daha cok gridlock yapan
+    /// kontrolcu IYI gorunur. (denetim.md BULGU 2)
+    std::vector<double> qSystem;
+    std::vector<double> fixedSystem;
+    std::vector<double> ruleSystem;
+    /// Her kosu tamamlandi mi (1/0). Varis orani buradan hesaplanir.
+    std::vector<int> qCompleted;
+    std::vector<int> fixedCompleted;
+    std::vector<int> ruleCompleted;
 };
 
 /// Uc vektorun uzunlugu da `seeds.size()` olmalidir. Bu esitlik, bayragin

@@ -50,6 +50,9 @@ RunResult runOnce(const Scenario& scenario, ControllerFactory factory, std::uint
 
     const Metrics& m = world.metrics();
     r.averageTravelTime = m.averageTravelTime();
+    // Sansursuz metrik: sistemde kalan araclari da sayar.
+    r.averageTimeInSystem = world.averageTimeInSystem();
+    r.arrivedFraction = m.arrivedFraction();
     const auto wait = m.averageWaitTime();
     r.averageWaitTime = wait.has_value() ? *wait : -1.0;
     r.arrived = m.arrived;
