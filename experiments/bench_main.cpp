@@ -312,16 +312,26 @@ void printComparisons(const std::map<std::string, std::vector<RunResult>>& runs,
         if (name == kontrolGrubu || rs.size() != ref.size()) continue;
         const auto r = pairedTTest(column(rs, &RunResult::averageTravelTime), ref);
         std::ostringstream ci;
-        ci << std::fixed << std::setprecision(1) << "[" << r.ciLow << ", " << r.ciHigh << "]";
         std::ostringstream fark;
         fark << std::fixed << std::setprecision(2) << r.meanDiff;
         std::ostringstream t;
-        t << std::fixed << std::setprecision(2) << r.tStat;
+        std::string sonuc;
+        if (r.degenerate) {
+            // Varyans tahmini yok: t, p ve aralik TANIMDIR. "fark yok" demek
+            // yanlis olurdu — olcum yapilamadi. (BULGU 3)
+            ci << "n/a";
+            t << "n/a";
+            sonuc = "TANIMSIZ";
+        } else {
+            ci << std::fixed << std::setprecision(1) << "[" << r.ciLow << ", " << r.ciHigh
+               << "]";
+            t << std::fixed << std::setprecision(2) << r.tStat;
+            sonuc = r.significant() ? (r.meanDiff < 0.0 ? "DAHA IYI" : "DAHA KOTU")
+                                    : "fark yok";
+        }
         std::cout << std::left << std::setw(16) << name << std::setw(14) << fark.str()
                   << std::setw(10) << t.str() << std::setw(9) << formatP(r.pTwoSided)
-                  << std::setw(20) << ci.str() << std::setw(14)
-                  << (r.significant() ? (r.meanDiff < 0.0 ? "DAHA IYI" : "DAHA KOTU")
-                                      : "fark yok") << "\n";
+                  << std::setw(20) << ci.str() << std::setw(14) << sonuc << "\n";
     }
 }
 

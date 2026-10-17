@@ -3,13 +3,16 @@
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
 namespace tsc {
 namespace {
 
-constexpr double kZ95 = 1.959963984540054;   // iki kuyruklu %95 kritik deger
+// NOT: Normal kuantili (eski kZ95 = 1.9599) BILINCLIKLE KALDIRILDI.
+// Guven araliklari artik Student t ile hesapliyor; iki farkli kritik deger
+// kullanmak tutarsizlikti (BULGU 3). Geri getirmeyin.
 
 // --- Tam sayisal olmayan beta fonksiyonu (Numerical Recipes, betacf/betai) ---
 
@@ -102,6 +105,35 @@ double studentTCdf(double t, std::size_t df) {
     return (t > 0.0) ? (1.0 - 0.5 * ib) : (0.5 * ib);
 }
 
+double studentTQuantile(double p, std::size_t df) {
+    if (df == 0) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    // Asimetrik (0,1) araligi [0,1]'e sigdir; uc degerlerde bisection
+    // sinirsiz genislemesin diye.
+    const double q = std::min(std::max(p, 1.0e-12), 1.0 - 1.0e-12);
+    // cdf tek ve artan; klasik bisection. t > 0 bolgesinde ariyoruz.
+    double lo = 0.0;
+    double hi = 1.0;
+    while (studentTCdf(hi, df) < q && hi < 1.0e12) {
+        hi *= 2.0;
+    }
+    for (int i = 0; i < 200; ++i) {
+        const double mid = 0.5 * (lo + hi);
+        if (studentTCdf(mid, df) < q) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return 0.5 * (lo + hi);
+}
+
+double tCritical95(std::size_t df) {
+    // %95 iki kuyruklu: P(T <= t) = 0.975
+    return studentTQuantile(0.975, df);
+}
+
 ConfidenceInterval describe(const std::vector<double>& x) {
     ConfidenceInterval r;
     r.n = x.size();
@@ -122,8 +154,18 @@ ConfidenceInterval describe(const std::vector<double>& x) {
         }
         r.sd = std::sqrt(ss / static_cast<double>(x.size() - 1));
     }
-    r.low = r.mean - kZ95 * r.sd / std::sqrt(static_cast<double>(x.size()));
-    r.high = r.mean + kZ95 * r.sd / std::sqrt(static_cast<double>(x.size()));
+    // Guven araligi da STUDENT t ile: normal kuantili (kZ95) n kucukken
+    // araligi daraltir. (BULGU 3 ile ayni duzeltme.)
+    if (x.size() > 1) {
+        const double tCrit = tCritical95(x.size() - 1);
+        const double yarim = tCrit * r.sd / std::sqrt(static_cast<double>(x.size()));
+        r.low = r.mean - yarim;
+        r.high = r.mean + yarim;
+    } else {
+        // Tek gozlem: varyans tahmini yok, aralik TANIMSIZ.
+        r.low = std::numeric_limits<double>::quiet_NaN();
+        r.high = std::numeric_limits<double>::quiet_NaN();
+    }
     return r;
 }
 
@@ -164,25 +206,43 @@ PairedTResult pairedTTest(const std::vector<double>& a, const std::vector<double
     r.sdDiff = std::sqrt(ss / static_cast<double>(a.size() - 1));
     r.stdError = r.sdDiff / std::sqrt(static_cast<double>(a.size()));
 
+    // Guven araligi kritik degeri: STUDENT t, normal kuantili DEGIL.
+    //
+    // Eski kurgu p-degerini t-dagilimiyla, araligi normal kuantili
+    // (kZ95 = 1.9599) ile hesapliyordu. Bu tutarsizlikti: n=5'te dogru
+    // kritik deger 2.776, yani aralik %41 DAR basiliyordu. (BULGU 3)
+    const double tCrit = tCritical95(r.df);
+
     if (r.stdError > 1e-15) {
         r.tStat = r.meanDiff / r.stdError;
+        r.pTwoSided = 2.0 * (1.0 - studentTCdf(std::abs(r.tStat), r.df));
+        r.pTwoSided = std::min(1.0, std::max(0.0, r.pTwoSided));
+        r.ciLow = r.meanDiff - tCrit * r.stdError;
+        r.ciHigh = r.meanDiff + tCrit * r.stdError;
     } else {
-        // Tum farklar ayni: varyans yok. Ortak fark sifirsa anlamli degil,
-        // degilse istatistiksel olarak belirgin (pratikte p -> 0).
-        r.tStat = (std::abs(r.meanDiff) > 1e-12) ? 1.0e6 : 0.0;
+        // Tum farklar birebir ayni: varyans TAHMINI YOK.
+        //
+        // Eski kurgu `tStat = 1.0e6` yazip "cok anlamlı" basiyordu. Bu
+        // sihirli sayi, sayisal bir artefakti da anlamli gosterebilirdi.
+        // Artik istatistik TANIMDIR: t, p ve aralik NaN'dir. Raporlayici
+        // `degenerate` bayragini gostermek zorundadir; "fark yok" DIYEMEZ,
+        // cunku "fark yok" ile "olcum yapilamadi" ayni sey degildir.
+        r.degenerate = true;
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        r.tStat = nan;
+        r.pTwoSided = nan;
+        r.ciLow = nan;
+        r.ciHigh = nan;
     }
-
-    r.pTwoSided = 2.0 * (1.0 - studentTCdf(std::abs(r.tStat), r.df));
-    r.pTwoSided = std::min(1.0, std::max(0.0, r.pTwoSided));
-
-    r.ciLow = r.meanDiff - kZ95 * r.stdError;
-    r.ciHigh = r.meanDiff + kZ95 * r.stdError;
     return r;
 }
 
 std::string formatP(double p) {
     std::ostringstream os;
-    if (p < 0.0005) {
+    if (std::isnan(p)) {
+        // Tanimsiz: 0.000 ya da "cok kucuk" olarak GORUNMEMELI.
+        os << "n/a";
+    } else if (p < 0.0005) {
         os << "<0.001";
     } else {
         os << std::fixed << std::setprecision(3) << p;

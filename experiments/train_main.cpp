@@ -269,14 +269,24 @@ int main(int argc, char** argv) {
         std::ostringstream fark;
         fark << std::fixed << std::setprecision(2) << res.meanDiff;
         std::ostringstream t;
-        t << std::fixed << std::setprecision(2) << res.tStat;
         std::ostringstream ci;
-        ci << std::fixed << std::setprecision(1) << "[" << res.ciLow << ", " << res.ciHigh << "]";
+        std::string sonuc;
+        if (res.degenerate) {
+            // Varyans tahmini yok: t, p ve aralik TANIMDIR. "fark yok" demek
+            // yanlis olurdu — olcum yapilamadi, etki yok DEGIL. (BULGU 3)
+            t << "n/a";
+            ci << "n/a";
+            sonuc = "TANIMSIZ";
+        } else {
+            t << std::fixed << std::setprecision(2) << res.tStat;
+            ci << std::fixed << std::setprecision(1) << "[" << res.ciLow << ", " << res.ciHigh
+               << "]";
+            sonuc = res.significant() ? (res.meanDiff < 0.0 ? "DAHA IYI" : "DAHA KOTU")
+                                      : "fark yok";
+        }
         std::cout << std::left << std::setw(20) << ad << std::setw(14) << fark.str()
                   << std::setw(10) << t.str() << std::setw(9) << formatP(res.pTwoSided)
-                  << std::setw(20) << ci.str() << std::setw(14)
-                  << (res.significant() ? (res.meanDiff < 0.0 ? "DAHA IYI" : "DAHA KOTU")
-                                        : "fark yok") << "\n";
+                  << std::setw(20) << ci.str() << std::setw(14) << sonuc << "\n";
     }
 
     // --- GUC UYARISI -------------------------------------------------------
