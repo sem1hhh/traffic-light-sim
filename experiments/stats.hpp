@@ -74,8 +74,8 @@ double studentTCdf(double t, std::size_t df);
 ///
 /// Guven araligi icin gerekir. p-degeri t-dagilimiyla hesaplanirken araligin
 /// normal kuantili (1.9599) ile hesaplanmasi TUTARSIZLIKTI: n=5'te dogru
-/// kritik deger 2.776'dir, yani aralik %41 DAR basiliyordu. (denetim.md
-/// BULGU 3)
+/// kritik deger 2.776'dir. Dogru aralik eski araligin 1.416 KATIDIR, yani
+/// dogrusu %41 daha GENISTIR. (denetim.md BULGU 3)
 ///
 /// Bisection ile bulunur: `studentTCdf` zaten mevcut ve dogrulanmis; onun
 /// tersini yeniden icat etmek yerine onu kullanmak daha az hata kaynagi.

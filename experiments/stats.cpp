@@ -210,7 +210,9 @@ PairedTResult pairedTTest(const std::vector<double>& a, const std::vector<double
     //
     // Eski kurgu p-degerini t-dagilimiyla, araligi normal kuantili
     // (kZ95 = 1.9599) ile hesapliyordu. Bu tutarsizlikti: n=5'te dogru
-    // kritik deger 2.776, yani aralik %41 DAR basiliyordu. (BULGU 3)
+    // kritik deger 2.776'dir. Doğru aralik eski araligin 1.416 KATIDIR,
+    // yani eski aralik dogrusundan %29 dar basilirdi — dogrusu %41 daha
+    // genistir. (BULGU 3)
     const double tCrit = tCritical95(r.df);
 
     if (r.stdError > 1e-15) {
