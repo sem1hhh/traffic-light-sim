@@ -117,27 +117,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
     return true;
 }
 
-/// Ogrenilen politika fabrikasi: her kavsaga AYRI kopya.
-ControllerFactory qFactory(const QLearningController& model) {
-    QLearningController seed = model;
-    seed.setEpsilon(0.0);   // degerlendirmede kesif YOK
-    return [seed](JunctionId) -> std::unique_ptr<IController> {
-        return std::make_unique<QLearningController>(seed);
-    };
-}
-
-ControllerFactory sabitFabrika() {
-    return [](JunctionId) -> std::unique_ptr<IController> {
-        return std::make_unique<FixedTimeController>();
-    };
-}
-
-ControllerFactory kuralFabrika() {
-    return [](JunctionId) -> std::unique_ptr<IController> {
-        return std::make_unique<ThresholdRuleController>();
-    };
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -231,12 +210,22 @@ int main(int argc, char** argv) {
     }
 
     // --- Degerlendirme: uc kontrolcu, eslestirilmis tohumlar ---------------
-    std::cout << "\n=== DEGERLENDIRME (" << opt.evalSeeds
-              << " tohum, eslestirilmis tasarim, kesif KAPALI) ===\n";
+    //
+    // !! HATA (denetim.md BULGU 1, 3bcc4da ile girdi) !!
+    //
+    // Onceki kod `TrainConfig k;` ile baslayip sadece `k.episodes` atiyordu.
+    // `TrainConfig::evalSeeds`'in varsayilani 5 oldugu icin dongu 5 tohumda
+    // donuyordu, ama ekrana `opt.evalSeeds` (150) yazdiriliyordu. Guc uyarisi
+    // da `opt.evalSeeds`'i okudugu icin hic tetiklenmiyordu. Yani guvenceler
+    // hesaplama degil EKRANI okuyordu ve ana sonuc 5 gozlemle raporlandi.
+    //
+    // Duzeltme: tohum sayisi artik TEK kaynaktan geliyor (`evaluationConfig`)
+    // ve hem ekran hem uyarI hem dongu ayni degeri okuyor.
+    const TrainConfig k = evaluationConfig(opt.episodes, opt.evalSeeds);
+    const std::vector<std::uint64_t> degerlendirmeTohumlari = evaluationSeeds(k);
 
-    std::vector<double> qSure;
-    std::vector<double> sabitSure;
-    std::vector<double> kuralSure;
+    std::cout << "\n=== DEGERLENDIRME (" << degerlendirmeTohumlari.size()
+              << " tohum, eslestirilmis tasarim, kesif KAPALI) ===\n";
 
     std::cout << "calistiriliyor...\n";
     // HATA DUZELTILDI: degerlendirme tohumlari 100..'dan basliyordu ve
@@ -244,15 +233,10 @@ int main(int argc, char** argv) {
     // degerlendirmede kullanilan evalFirstSeed ile AYNI aralik kullanilir;
     // boylece degerlendirme hicbir zaman egitimde gorulmus bir
     // gerceklesimi kullanmaz.
-    TrainConfig k;
-    k.episodes = opt.episodes;
-    const std::vector<std::uint64_t> degerlendirmeTohumlari = evaluationSeeds(k);
-    for (std::size_t s = 0; s < degerlendirmeTohumlari.size(); ++s) {
-        const std::uint64_t seed = degerlendirmeTohumlari[s];
-        qSure.push_back(runOnce(sc, qFactory(policy), seed).averageTravelTime);
-        sabitSure.push_back(runOnce(sc, sabitFabrika(), seed).averageTravelTime);
-        kuralSure.push_back(runOnce(sc, kuralFabrika(), seed).averageTravelTime);
-    }
+    const EvaluationRun ev = runEvaluation(sc, policy, degerlendirmeTohumlari);
+    const std::vector<double>& qSure = ev.qTravel;
+    const std::vector<double>& sabitSure = ev.fixedTravel;
+    const std::vector<double>& kuralSure = ev.ruleTravel;
 
     auto cell = [](const std::vector<double>& v) {
         const auto d = describe(v);
@@ -309,8 +293,12 @@ int main(int argc, char** argv) {
     const double qsd = describe(qSure).sd;
     const double farkStd = describe(std::vector<double>{}).sd;   // yer tutucu
     static_cast<void>(farkStd);
-    if (static_cast<double>(opt.evalSeeds) < 100.0) {
-        std::cout << "\n[UYARI] Yalnizca " << opt.evalSeeds
+    // UYARI artik GERCEK donulen tohum sayisina bagli. Eskiden `opt.evalSeeds`
+    // okunuyordu; bayrak yok sayilsaydi bile uyari 150 icin susardi ve tam da
+    // yakalamasi gereken hatayi gizlerdi.
+    const double gercekTohum = static_cast<double>(degerlendirmeTohumlari.size());
+    if (gercekTohum < 100.0) {
+        std::cout << "\n[UYARI] Yalnizca " << degerlendirmeTohumlari.size()
                   << " tohum kullanildi. Eslestirilmis t-testinde bu kadar gozlem,"
                   << " gozlenen kucuk etkileri gostermek icin YETERSIZ olabilir."
                      " 'fark yok' sonucu cikmasi, farkin olmadigini DEGIL,"

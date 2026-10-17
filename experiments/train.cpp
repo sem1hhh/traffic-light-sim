@@ -2,6 +2,7 @@
 
 #include "controller.hpp"
 #include "fixed_time.hpp"
+#include "threshold.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -97,6 +98,52 @@ std::vector<std::uint64_t> evaluationSeeds(const TrainConfig& cfg) {
         v.push_back(cfg.evalFirstSeed + static_cast<std::uint64_t>(k));
     }
     return v;
+}
+
+TrainConfig evaluationConfig(int episodes, int evalSeeds) {
+    TrainConfig cfg;
+    cfg.episodes = episodes;
+    cfg.evalSeeds = evalSeeds;
+    return cfg;
+}
+
+EvaluationRun runEvaluation(const Scenario& scenario,
+                            const QLearningController& policy,
+                            const std::vector<std::uint64_t>& seeds) {
+    EvaluationRun r;
+    r.qTravel.reserve(seeds.size());
+    r.fixedTravel.reserve(seeds.size());
+    r.ruleTravel.reserve(seeds.size());
+
+    // Degerlendirmede kesif YOK. Modelin kendisi burada degismez: her kosu
+    // AYNI baslangic politikasiyla baslar (runOnce, writeBack kullanmaz).
+    QLearningController model = policy;
+    model.setEpsilon(0.0);
+
+    for (const std::uint64_t seed : seeds) {
+        r.qTravel.push_back(
+            runOnce(scenario,
+                    [&model](JunctionId) -> std::unique_ptr<IController> {
+                        return std::make_unique<QLearningController>(model);
+                    },
+                    seed)
+                .averageTravelTime);
+        r.fixedTravel.push_back(
+            runOnce(scenario,
+                    [](JunctionId) -> std::unique_ptr<IController> {
+                        return std::make_unique<FixedTimeController>();
+                    },
+                    seed)
+                .averageTravelTime);
+        r.ruleTravel.push_back(
+            runOnce(scenario,
+                    [](JunctionId) -> std::unique_ptr<IController> {
+                        return std::make_unique<ThresholdRuleController>();
+                    },
+                    seed)
+                .averageTravelTime);
+    }
+    return r;
 }
 
 /// Kesif olasiligini bolum ilerlemesine gore azalt.

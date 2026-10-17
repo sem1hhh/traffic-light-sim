@@ -73,6 +73,34 @@ EpisodeOutcome runEpisode(const Scenario& scenario, QLearningController& model,
 std::vector<std::uint64_t> trainingSeeds(const TrainConfig& cfg);
 std::vector<std::uint64_t> evaluationSeeds(const TrainConfig& cfg);
 
+/// Degerlendirmede **gercekten** kac tohum donulecegini tek noktadan belirler.
+///
+/// Neden var: `train_main` ekranda `opt.evalSeeds` (150) yazdirirken
+/// `TrainConfig`'i varsayilan degeriyle (evalSeeds = 5) kuruyordu; dongu
+/// 5 tohumda donuyordu ve ekrana 150 yazdiriliyordu. Guc uyarisi da
+/// ayni yanlis degiskeni okudugu icin hic basilmıyordu. Yani "kac tohum
+/// kullandik" sorusunun tek cevap kaynagi buydu; ekrana bakilmiyordu.
+/// (denetim.md BULGU 1 — 3bcc4da ile girdi)
+TrainConfig evaluationConfig(int episodes, int evalSeeds);
+
+/// Uc kontrolcuyu **eslestirilmis** tohumlar uzerinde kosturur.
+///
+/// `train_main` ve regresyon testi AYNI fonksiyonu kullanir; boylece
+/// "kac tohum gercekten donuluyor" sorusu kod uzerunden dogrulanabilir.
+/// Daha once bu dongu `main()` icindeydi ve uzerinden test yazılamıyordu
+/// (AGENTS.md 8.10: dogrulama yapan test, dogrulama yapmiyor).
+struct EvaluationRun {
+    std::vector<double> qTravel;      ///< Q-learning yolculuk sureleri (s)
+    std::vector<double> fixedTravel;  ///< sabit zamanli yolculuk sureleri
+    std::vector<double> ruleTravel;   ///< kural esikli yolculuk sureleri
+};
+
+/// Uc vektorun uzunlugu da `seeds.size()` olmalidir. Bu esitlik, bayragin
+/// yok sayildigi hatayi (istenen tohum ≠ donulen tohum) yakalar.
+EvaluationRun runEvaluation(const Scenario& scenario,
+                            const QLearningController& policy,
+                            const std::vector<std::uint64_t>& seeds);
+
 /// Bir senaryoda Q-learning eğitir ve **değerlendirir**.
 ///
 /// Eğitim ile değerlendirme AYRI koşulardır: eğitimde keşif açıktır ve
