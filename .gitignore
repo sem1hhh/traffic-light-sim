@@ -3,6 +3,10 @@ build/
 cmake-build-*/
 out/
 
+# Python (tools/mutation)
+__pycache__/
+*.pyc
+
 # Simulasyon / deney ciktilari
 csv/
 *.csv
