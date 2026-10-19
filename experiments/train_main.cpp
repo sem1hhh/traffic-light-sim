@@ -36,6 +36,8 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -115,27 +117,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         return false;
     }
     return true;
-}
-
-/// Ogrenilen politika fabrikasi: her kavsaga AYRI kopya.
-ControllerFactory qFactory(const QLearningController& model) {
-    QLearningController seed = model;
-    seed.setEpsilon(0.0);   // degerlendirmede kesif YOK
-    return [seed](JunctionId) -> std::unique_ptr<IController> {
-        return std::make_unique<QLearningController>(seed);
-    };
-}
-
-ControllerFactory sabitFabrika() {
-    return [](JunctionId) -> std::unique_ptr<IController> {
-        return std::make_unique<FixedTimeController>();
-    };
-}
-
-ControllerFactory kuralFabrika() {
-    return [](JunctionId) -> std::unique_ptr<IController> {
-        return std::make_unique<ThresholdRuleController>();
-    };
 }
 
 }  // namespace
@@ -231,12 +212,22 @@ int main(int argc, char** argv) {
     }
 
     // --- Degerlendirme: uc kontrolcu, eslestirilmis tohumlar ---------------
-    std::cout << "\n=== DEGERLENDIRME (" << opt.evalSeeds
-              << " tohum, eslestirilmis tasarim, kesif KAPALI) ===\n";
+    //
+    // !! HATA (denetim.md BULGU 1, 3bcc4da ile girdi) !!
+    //
+    // Onceki kod `TrainConfig k;` ile baslayip sadece `k.episodes` atiyordu.
+    // `TrainConfig::evalSeeds`'in varsayilani 5 oldugu icin dongu 5 tohumda
+    // donuyordu, ama ekrana `opt.evalSeeds` (150) yazdiriliyordu. Guc uyarisi
+    // da `opt.evalSeeds`'i okudugu icin hic tetiklenmiyordu. Yani guvenceler
+    // hesaplama degil EKRANI okuyordu ve ana sonuc 5 gozlemle raporlandi.
+    //
+    // Duzeltme: tohum sayisi artik TEK kaynaktan geliyor (`evaluationConfig`)
+    // ve hem ekran hem uyarI hem dongu ayni degeri okuyor.
+    const TrainConfig k = evaluationConfig(opt.episodes, opt.evalSeeds);
+    const std::vector<std::uint64_t> degerlendirmeTohumlari = evaluationSeeds(k);
 
-    std::vector<double> qSure;
-    std::vector<double> sabitSure;
-    std::vector<double> kuralSure;
+    std::cout << "\n=== DEGERLENDIRME (" << degerlendirmeTohumlari.size()
+              << " tohum, eslestirilmis tasarim, kesif KAPALI) ===\n";
 
     std::cout << "calistiriliyor...\n";
     // HATA DUZELTILDI: degerlendirme tohumlari 100..'dan basliyordu ve
@@ -244,15 +235,10 @@ int main(int argc, char** argv) {
     // degerlendirmede kullanilan evalFirstSeed ile AYNI aralik kullanilir;
     // boylece degerlendirme hicbir zaman egitimde gorulmus bir
     // gerceklesimi kullanmaz.
-    TrainConfig k;
-    k.episodes = opt.episodes;
-    const std::vector<std::uint64_t> degerlendirmeTohumlari = evaluationSeeds(k);
-    for (std::size_t s = 0; s < degerlendirmeTohumlari.size(); ++s) {
-        const std::uint64_t seed = degerlendirmeTohumlari[s];
-        qSure.push_back(runOnce(sc, qFactory(policy), seed).averageTravelTime);
-        sabitSure.push_back(runOnce(sc, sabitFabrika(), seed).averageTravelTime);
-        kuralSure.push_back(runOnce(sc, kuralFabrika(), seed).averageTravelTime);
-    }
+    const EvaluationRun ev = runEvaluation(sc, policy, degerlendirmeTohumlari);
+    const std::vector<double>& qSure = ev.qTravel;
+    const std::vector<double>& sabitSure = ev.fixedTravel;
+    const std::vector<double>& kuralSure = ev.ruleTravel;
 
     auto cell = [](const std::vector<double>& v) {
         const auto d = describe(v);
@@ -260,57 +246,133 @@ int main(int argc, char** argv) {
         os << std::fixed << std::setprecision(2) << d.mean << " +/- " << d.sd;
         return os.str();
     };
-
+    auto oran = [](const std::vector<int>& tam) {
+        int n = 0;
+        for (const int x : tam) {
+            n += x;
+        }
+        std::ostringstream os;
+        os << n << "/" << tam.size();
+        return os.str();
+    };
+    // !! BULGU 2 — sansur !!
+    //
+    // "yolculuk (s)" yalnizca VARAN araclari sayar. Zaman asiminda kalan
+    // (gridlock) araclar hesaba hic girmez; boylece daha cok gridlock yapan
+    // kontrolcu daha IYI gorunur. Bu nedenle KARSILASTIRMA artik iki tablo
+    // halinde basiliyor ve hangisinin esas oldugu asagida yaziliyor.
     std::cout << "\n--- OZET ---\n";
-    std::cout << std::left << std::setw(20) << "kontrolcu" << std::setw(20)
-              << "yolculuk (s)" << "\n" << std::string(40, '-') << "\n";
-    std::cout << std::left << std::setw(20) << "q-learning" << std::setw(20)
-              << cell(qSure) << "\n";
-    std::cout << std::left << std::setw(20) << "sabit-zamanli" << std::setw(20)
-              << cell(sabitSure) << "\n";
-    std::cout << std::left << std::setw(20) << "kural-esikli" << std::setw(20)
-              << cell(kuralSure) << "\n";
-
-    std::cout << "\n--- KARSILASTIRMA (karsi referans: sabit-zamanli) ---\n";
-    std::cout << "kontrolcu ile sabit-zamanli arasindaki ORTALAMA FARK negatifse,\n"
-              << "yani sure KISALDIYSA, kontrolcu daha iyidir.\n\n";
-    std::cout << std::left << std::setw(20) << "kontrolcu" << std::setw(14)
-              << "ort. fark (s)" << std::setw(10) << "t" << std::setw(9) << "p"
-              << std::setw(20) << "%95 guven arligi" << std::setw(14) << "sonuc" << "\n";
-    std::cout << std::string(87, '-') << "\n";
-
-    for (const auto& [ad, v] : {std::pair<std::string, const std::vector<double>*>{"q-learning", &qSure},
-                                std::pair<std::string, const std::vector<double>*>{"kural-esikli", &kuralSure}}) {
-        const PairedTResult res = pairedTTest(*v, sabitSure);
-        std::ostringstream fark;
-        fark << std::fixed << std::setprecision(2) << res.meanDiff;
-        std::ostringstream t;
-        t << std::fixed << std::setprecision(2) << res.tStat;
-        std::ostringstream ci;
-        ci << std::fixed << std::setprecision(1) << "[" << res.ciLow << ", " << res.ciHigh << "]";
-        std::cout << std::left << std::setw(20) << ad << std::setw(14) << fark.str()
-                  << std::setw(10) << t.str() << std::setw(9) << formatP(res.pTwoSided)
-                  << std::setw(20) << ci.str() << std::setw(14)
-                  << (res.significant() ? (res.meanDiff < 0.0 ? "DAHA IYI" : "DAHA KOTU")
-                                        : "fark yok") << "\n";
+    std::cout << std::left << std::setw(20) << "kontrolcu" << std::setw(24)
+              << "yolculuk (s, sansurlu)" << std::setw(24) << "sistemde (s, sansursuz)"
+              << std::setw(14) << "biten kosu" << "\n" << std::string(82, '-') << "\n";
+    for (const auto& [ad, sure, sistem, biten] :
+         {std::tuple<const char*, const std::vector<double>*, const std::vector<double>*,
+                     const std::vector<int>*>{"q-learning", &qSure, &ev.qSystem, &ev.qCompleted},
+          std::tuple<const char*, const std::vector<double>*, const std::vector<double>*,
+                     const std::vector<int>*>{"sabit-zamanli", &sabitSure, &ev.fixedSystem,
+                                              &ev.fixedCompleted},
+          std::tuple<const char*, const std::vector<double>*, const std::vector<double>*,
+                     const std::vector<int>*>{"kural-esikli", &kuralSure, &ev.ruleSystem,
+                                              &ev.ruleCompleted}}) {
+        std::cout << std::left << std::setw(20) << ad << std::setw(24) << cell(*sure)
+                  << std::setw(24) << cell(*sistem) << std::setw(14) << oran(*biten) << "\n";
     }
 
-    // --- GUC UYARISI -------------------------------------------------------
+    auto karsilastir = [&](const char* baslik, const std::vector<double>& ref,
+                           const std::vector<std::pair<const char*, const std::vector<double>*>>&
+                               digerleri) {
+        std::cout << "\n--- " << baslik << " (karsi referans: sabit-zamanli) ---\n";
+        std::cout << "kontrolcu ile sabit-zamanli arasindaki ORTALAMA FARK negatifse,\n"
+                  << "yani sure KISALDIYSA, kontrolcu daha iyidir.\n\n";
+        std::cout << std::left << std::setw(20) << "kontrolcu" << std::setw(14)
+                  << "ort. fark (s)" << std::setw(10) << "t" << std::setw(9) << "p"
+                  << std::setw(20) << "%95 guven arligi" << std::setw(14) << "sonuc" << "\n";
+        std::cout << std::string(87, '-') << "\n";
+
+        for (const auto& [ad, v] : digerleri) {
+            const PairedTResult res = pairedTTest(*v, ref);
+            std::ostringstream fark;
+            fark << std::fixed << std::setprecision(2) << res.meanDiff;
+            std::ostringstream t;
+            std::ostringstream ci;
+            std::string sonuc;
+            if (res.degenerate) {
+                // Varyans tahmini yok: t, p ve aralik TANIMDIR. "fark yok" demek
+                // yanlis olurdu — olcum yapilamadi, etki yok DEGIL. (BULGU 3)
+                t << "n/a";
+                ci << "n/a";
+                sonuc = "TANIMSIZ";
+            } else {
+                t << std::fixed << std::setprecision(2) << res.tStat;
+                ci << std::fixed << std::setprecision(1) << "[" << res.ciLow << ", "
+                   << res.ciHigh << "]";
+                sonuc = res.significant() ? (res.meanDiff < 0.0 ? "DAHA IYI" : "DAHA KOTU")
+                                          : "fark yok";
+            }
+            std::cout << std::left << std::setw(20) << ad << std::setw(14) << fark.str()
+                      << std::setw(10) << t.str() << std::setw(9) << formatP(res.pTwoSided)
+                      << std::setw(20) << ci.str() << std::setw(14) << sonuc << "\n";
+        }
+    };
+
+    karsilastir("KARSILASTIRMA A — yolculuk suresi (SANSURLU, yalnizca varanlar)", sabitSure,
+                {{"q-learning", &qSure}, {"kural-esikli", &kuralSure}});
+    karsilastir("KARSILASTIRMA B — sistemde kalis suresi (SANSURSUZ, her arac)", ev.fixedSystem,
+                {{"q-learning", &ev.qSystem}, {"kural-esikli", &ev.ruleSystem}});
+
+    // Hangi tablo esastir? Biten kosum orani farkliysa A TABLOSU GUVENILMEZDIR.
+    auto bitenYuzde = [](const std::vector<int>& tam) {
+        int n = 0;
+        for (const int x : tam) {
+            n += x;
+        }
+        return static_cast<double>(n) / static_cast<double>(tam.size());
+    };
+    const double enDusuk = std::min({bitenYuzde(ev.qCompleted), bitenYuzde(ev.fixedCompleted),
+                                     bitenYuzde(ev.ruleCompleted)});
+    const double enYuksek = std::max({bitenYuzde(ev.qCompleted), bitenYuzde(ev.fixedCompleted),
+                                      bitenYuzde(ev.ruleCompleted)});
+    if (enYuksek - enDusuk > 0.05) {
+        std::cout << "\n[SANSUR UYARISI] Biten kosum orani kontrolculer arasinda %5'ten fazla\n"
+                  << "  farkli. KARSILASTIRMA A yalnizca VARAN araclari saydigi icin\n"
+                  << "  GUVENILMEZDIR; yorum icin KARSILASTIRMA B (sansursuz) esastir.\n";
+    }
+
+    // --- YORUM NOTLARI -------------------------------------------------------
     //
-    // ILK KOSULARDA degerlendirme 30 tohumdu ve HICBIR rejimde fark
-    // anlamli cikmadi; "Q-learning sabit zamanliyi gecmiyor" sonucu
-    // cikarildi. YANLIS SONUCLUYDU: 30 cift gozlemde gozlenen etki
-    // buyuklugune karsil %80 guc ancak ~%45 idi.
+    // 1) KUCUK ORNEKLEM. 30 tohumla "hicbir rejimde anlamlı fark yok" denmis,
+    //    bu YANLIS SONUCLUYDU: 30 cift gozlemde gozlenen etki buyuklugune
+    //    karsil %80 guc ancak ~%45 idi. "Anlamli degil" ile "fark yok"
+    //    AYNI SEY DEGILDIR: ilki gucun yetersiz oldugunu anlatir.
     //
-    // 150 tohumde: light p<0.001, medium p<0.001, saturated p=0.64.
+    // 2) SANSUR (bu dosyada KARSILASTIRMA A ve B olarak basiliyor). "yolculuk"
+    //    yalnizca VARAN araclari sayar; takilan araclar hesaba girmez. 150
+    //    tohum olcumunde iki tablo REJIME GORE ZIT YONDE SONUC VERDI:
+    //      light      A: Q daha iyi (p<0.001)   B: fark yok (p=0.308)
+    //      medium     A: fark yok (p=0.224)     B: sabit daha iyi (p=0.006)
+    //      saturated  A: Q daha iyi (p<0.001)   B: sabit daha iyi (p=0.001)
+    //    Yani "Q-learning daha iyi mi" sorusunun cevabi, olcum aracina gore
+    //    DEGISIYOR. Sansursuz metrik B'dir; A, takilan araclari hic
+    //    goremedigi icin zaman siniri artirilsa bile DEGIMEZ (900/1800/3600
+    //    s'de birebir ayni cikti — bu, arac gorunmezliginin kendisidir).
+    //
+    // 3) SANSURDAN BAGIMSIZ ucuncu goz: bitirme orani. Q-learning UC rejimde
+    //    de sabit zamanlidan AZ bitirdi (138/150 karsi 141/150; 101 karsi
+    //    115; 32 karsi 45). McNemar: medium p=0.038, saturated p=0.015 —
+    //    sabit zamanli GERCEKTEN daha cok bitiriyor. Bu sayim ortalamaya
+    //    degil "hangi kosu bitti"ye bakar; sansur etkilemez.
     //
     // "Anlamli degil" ile "fark yok" AYNI SEY DEGILDIR. Ilki gucun
     // yetersiz oldugunu, ikincisi etkinin olmadigini anlatir.
     const double qsd = describe(qSure).sd;
     const double farkStd = describe(std::vector<double>{}).sd;   // yer tutucu
     static_cast<void>(farkStd);
-    if (static_cast<double>(opt.evalSeeds) < 100.0) {
-        std::cout << "\n[UYARI] Yalnizca " << opt.evalSeeds
+    // UYARI artik GERCEK donulen tohum sayisina bagli. Eskiden `opt.evalSeeds`
+    // okunuyordu; bayrak yok sayilsaydi bile uyari 150 icin susardi ve tam da
+    // yakalamasi gereken hatayi gizlerdi.
+    const double gercekTohum = static_cast<double>(degerlendirmeTohumlari.size());
+    if (gercekTohum < 100.0) {
+        std::cout << "\n[UYARI] Yalnizca " << degerlendirmeTohumlari.size()
                   << " tohum kullanildi. Eslestirilmis t-testinde bu kadar gozlem,"
                   << " gozlenen kucuk etkileri gostermek icin YETERSIZ olabilir."
                      " 'fark yok' sonucu cikmasi, farkin olmadigini DEGIL,"

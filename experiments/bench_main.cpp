@@ -177,19 +177,75 @@ std::vector<double> column(const std::vector<RunResult>& rs, double RunResult::*
     return v;
 }
 
+/// Bekleme sutunu — OLCELMEMIS degerler (-1.0 isareti) ELLENIR.
+///
+/// Neden: `averageWaitTime` hic arac varmadiginda -1.0 doner. O deger
+/// describe() ortalamasina karissaydi ortalamayi asagi cekerdi: yani en
+/// KOTU kosul, EN IYI bekleme suresini uretirdi (BULGU 2 ile ayni tuzak).
+/// Artik ortalama yalnizca GERCEKTEN olculmus kosularin ortalamasidir.
+std::vector<double> beklemeColumn(const std::vector<RunResult>& rs) {
+    std::vector<double> v;
+    v.reserve(rs.size());
+    for (const RunResult& r : rs) {
+        if (r.averageWaitTime >= 0.0) {   // -1.0 isareti ele
+            v.push_back(r.averageWaitTime);
+        }
+    }
+    return v;
+}
+
+/// Sansur (censoring) uyarisi: zaman asiminda kalan araclar `averageTravelTime`
+/// hesabina GIRMEZ. Iki kontrolcunun bitirme orani farkliysa karsilastirma
+/// esitsizdir: daha cok gridlock yapan kontrolcu, daha IYI gorunen bir
+/// yolculuk suresi uretir.
+///
+/// Olculdu (saturated, 30 tohum): korelasyon(varan, yolculuk) = +0.66 — yani
+/// daha az varis, daha dusuk gorunen sure. Bu, "kural tabanli daha iyi"
+/// sonucunu tek basina uretebilir. (denetim.md BULGU 2)
+void printCensoringWarning(const std::map<std::string, std::vector<RunResult>>& runs) {
+    double enKotu = 0.0;
+    double enIyi = 1.0;
+    std::string enKotuAd, enIyiAd;
+    for (const auto& [name, rs] : runs) {
+        if (rs.empty()) continue;
+        const double fr = describe(column(rs, &RunResult::arrivedFraction)).mean;
+        if (fr > enKotu) { enKotu = fr; enKotuAd = name; }
+        if (fr < enIyi) { enIyi = fr; enIyiAd = name; }
+    }
+    // 5 puan fark, "hangisi daha iyi" kararini zaten bozebilir.
+    if (enKotu - enIyi < 0.05) {
+        return;
+    }
+    std::ostringstream oran;
+    oran << std::fixed << std::setprecision(1) << (100.0 * enIyi) << "%";
+    std::cout << "\n[SANSUR UYARISI] Kontrolculerin varis orani farkli: en dusuk '"
+              << enIyiAd << "' (" << oran.str()
+              << "), en yuksek '" << enKotuAd << "' (" << std::fixed
+              << std::setprecision(1) << (100.0 * enKotu) << "%).\n"
+              << "  'yolculuk (s)' sutunu yalnizca VARAN araclari sayar; zaman asiminda\n"
+              << "  kalanlar hesaba girmez. Boylece daha cok gridlock yapan kontrolcu\n"
+              << "  daha IYI gorunebilir. Karsilastirmayi 'ortalama sistemde kalis'\n"
+              << "  (CSV: average_time_in_system) ile kontrol edin.\n";
+}
+
 void printSummary(const std::map<std::string, std::vector<RunResult>>& runs) {
     std::cout << "\n=== OZET (ortalama +/- orneklem sapmasi) ===\n";
     std::cout << std::left << std::setw(16) << "kontrolcu" << std::setw(5) << "n"
-              << std::setw(19) << "yolculuk (s)" << std::setw(19) << "bekleme (s)"
+              << std::setw(19) << "yolculuk (s)" << std::setw(19) << "sistemde (s)"
+              << std::setw(9) << "varis %" << std::setw(19) << "bekleme (s)"
               << std::setw(19) << "ort. kuyruk" << std::setw(11) << "tamamlanan"
               << std::setw(11) << "gridlock" << std::setw(13) << "ort. gecis"
               << std::setw(10) << "carpisma" << "\n";
-    std::cout << std::string(113, '-') << "\n";
+    std::cout << std::string(150, '-') << "\n";
 
     for (const auto& [name, rs] : runs) {
         if (rs.empty()) continue;
         const auto t = describe(column(rs, &RunResult::averageTravelTime));
-        const auto w = describe(column(rs, &RunResult::averageWaitTime));
+        // Sansursuz metrik: sistemde kalan araclari da sayar.
+        const auto ts = describe(column(rs, &RunResult::averageTimeInSystem));
+        const auto fr = describe(column(rs, &RunResult::arrivedFraction));
+        // -1.0 isareti ele; ortalama yalnizca GERCEKTEN olculmus kosulda.
+        const auto w = describe(beklemeColumn(rs));
         const auto q = describe(column(rs, &RunResult::averageQueue));
         int done = 0;
         int coll = 0;
@@ -217,10 +273,13 @@ void printSummary(const std::map<std::string, std::vector<RunResult>>& runs) {
         tam << done << "/" << rs.size();
         std::ostringstream gec;
         gec << std::fixed << std::setprecision(1) << gecisOrt;
+        std::ostringstream varis;
+        varis << std::fixed << std::setprecision(1) << (100.0 * fr.mean) << "%";
         std::cout << std::left << std::setw(16) << name << std::setw(5) << rs.size()
                   << std::setw(19) << hucre(t.mean, t.sd) << std::setw(19)
-                  << hucre(w.mean, w.sd) << std::setw(19) << hucre(q.mean, q.sd)
-                  << std::setw(11) << tam.str() << std::setw(11) << kilitli
+                  << hucre(ts.mean, ts.sd) << std::setw(9) << varis.str()
+                  << std::setw(19) << hucre(w.mean, w.sd) << std::setw(19)
+                  << hucre(q.mean, q.sd) << std::setw(11) << tam.str() << std::setw(11) << kilitli
                   << std::setw(13) << gec.str() << std::setw(10) << coll << "\n";
     }
 }
@@ -253,16 +312,26 @@ void printComparisons(const std::map<std::string, std::vector<RunResult>>& runs,
         if (name == kontrolGrubu || rs.size() != ref.size()) continue;
         const auto r = pairedTTest(column(rs, &RunResult::averageTravelTime), ref);
         std::ostringstream ci;
-        ci << std::fixed << std::setprecision(1) << "[" << r.ciLow << ", " << r.ciHigh << "]";
         std::ostringstream fark;
         fark << std::fixed << std::setprecision(2) << r.meanDiff;
         std::ostringstream t;
-        t << std::fixed << std::setprecision(2) << r.tStat;
+        std::string sonuc;
+        if (r.degenerate) {
+            // Varyans tahmini yok: t, p ve aralik TANIMDIR. "fark yok" demek
+            // yanlis olurdu — olcum yapilamadi. (BULGU 3)
+            ci << "n/a";
+            t << "n/a";
+            sonuc = "TANIMSIZ";
+        } else {
+            ci << std::fixed << std::setprecision(1) << "[" << r.ciLow << ", " << r.ciHigh
+               << "]";
+            t << std::fixed << std::setprecision(2) << r.tStat;
+            sonuc = r.significant() ? (r.meanDiff < 0.0 ? "DAHA IYI" : "DAHA KOTU")
+                                    : "fark yok";
+        }
         std::cout << std::left << std::setw(16) << name << std::setw(14) << fark.str()
                   << std::setw(10) << t.str() << std::setw(9) << formatP(r.pTwoSided)
-                  << std::setw(20) << ci.str() << std::setw(14)
-                  << (r.significant() ? (r.meanDiff < 0.0 ? "DAHA IYI" : "DAHA KOTU")
-                                      : "fark yok") << "\n";
+                  << std::setw(20) << ci.str() << std::setw(14) << sonuc << "\n";
     }
 }
 
@@ -279,7 +348,8 @@ void writeCsv(const std::string& dir, const std::vector<RunResult>& runs) {
         std::cerr << "UYARI: CSV acilamadi: " << path << "\n";
         return;
     }
-    f << "load,controller,seed,average_travel_time,average_wait_time,arrived,spawned,"
+    f << "load,controller,seed,average_travel_time,average_time_in_system,"
+         "arrived_fraction,average_wait_time,arrived,spawned,"
          "average_system_count,average_queue,max_queue,collisions,sim_seconds,completed,"
          "deadlocked,switch_requests,digest\n";
     f << std::fixed << std::setprecision(6);
@@ -289,7 +359,8 @@ void writeCsv(const std::string& dir, const std::vector<RunResult>& runs) {
         const std::size_t at = r.controller.find('@');
         f << (at == std::string::npos ? std::string("") : r.controller.substr(at + 1)) << ','
           << (at == std::string::npos ? r.controller : r.controller.substr(0, at)) << ','
-          << r.seed << ',' << r.averageTravelTime << ',' << r.averageWaitTime << ','
+          << r.seed << ',' << r.averageTravelTime << ',' << r.averageTimeInSystem << ','
+          << r.arrivedFraction << ',' << r.averageWaitTime << ','
           << r.arrived << ',' << r.spawned << ',' << r.averageSystemCount << ','
           << r.averageQueue << ',' << r.maxQueue << ',' << r.collisions << ','
           << r.simSeconds << ',' << (r.completed ? 1 : 0) << ',' << (r.deadlocked ? 1 : 0)
@@ -362,6 +433,7 @@ int main(int argc, char** argv) {
 
         printSummary(runs);
         printComparisons(runs, "sabit-zamanli");
+        printCensoringWarning(runs);
     }
 
     if (opt.csv && !opt.outDir.empty()) {

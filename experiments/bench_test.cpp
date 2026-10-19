@@ -354,3 +354,54 @@ TEST_CASE("Ayni senaryo iki kez kurulunca ayni agi verir") {
     CHECK_EQ(buildNetwork(buildScenarioGrid(s)).laneCount(),
              buildNetwork(buildScenarioGrid(s)).laneCount());
 }
+// ---------------------------------------------------------------------------
+// Sansur (censoring) — denetim.md BULGU 2
+//
+// `averageTravelTime` yalnizca VARAN araclari sayar. Iki kontrolcunun bitirme
+// orani farkliysa karsilastirma esitsizdir: daha cok gridlock yapan, daha
+// IYI gorunen yolculuk suresi uretir. Bu testler, sansursuz metrikin
+// runOnce tarafindan GERCEKTEN dolduruldugunu ve farkli ciktigini kanitlar.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("RunResult sansursuz metrikleri doldurulur ve tutarlidir") {
+    const Scenario s = testScenario();
+    const RunResult r = runOnce(s, [](JunctionId) -> std::unique_ptr<IController> {
+        return std::make_unique<FixedTimeController>();
+    }, 4242);
+
+    // Varis orani [0,1] araliginda ve varan/uretilen ile tutarli.
+    CHECK_GE(r.arrivedFraction, 0.0);
+    CHECK_LE(r.arrivedFraction, 1.0);
+    CHECK_NEAR_T(r.arrivedFraction,
+                 static_cast<double>(r.arrived) / static_cast<double>(r.spawned), 1e-12);
+
+    // Sansursuz metrik, yalnizca varanlari sayan metrikten KUCUK OLAMAZ.
+    // (Sistemde kalan arac yoksa ESITTIR.)
+    CHECK_GE(r.averageTimeInSystem, r.averageTravelTime);
+}
+
+TEST_CASE("Kisa surede sansur gorunur: varis orani dusuk, iki metrik FARKLIDIR") {
+    Scenario s = testScenario(40, 1.0);
+    s.timeLimit = 20.0;   // 40 arac 20 saniyede varamaz
+    const RunResult r = runOnce(s, [](JunctionId) -> std::unique_ptr<IController> {
+        return std::make_unique<FixedTimeController>();
+    }, 4242);
+
+    // Sansur gercekten var — test bosa karsi kanitlamali (AGENTS.md 8.10).
+    REQUIRE_LT(r.arrived, r.spawned);
+    CHECK_LT(r.arrivedFraction, 1.0);
+
+    // Iki metrik farkli: sansur artik olcumde gorunuyor.
+    CHECK_GT(r.averageTimeInSystem, r.averageTravelTime);
+}
+
+TEST_CASE("Temiz kosuda iki metrik ESITTIR — sansur duzeltilmis metrigi eski degeri bozmaz") {
+    Scenario s = testScenario(20, 1.0);
+    s.timeLimit = 1800.0;   // bol bol zaman
+    const RunResult r = runOnce(s, [](JunctionId) -> std::unique_ptr<IController> {
+        return std::make_unique<FixedTimeController>();
+    }, 4242);
+    REQUIRE_EQ(r.arrived, r.spawned);   // kayip yok
+    CHECK_NEAR_T(r.averageTimeInSystem, r.averageTravelTime, 1e-12);
+    CHECK_NEAR_T(r.arrivedFraction, 1.0, 1e-12);
+}

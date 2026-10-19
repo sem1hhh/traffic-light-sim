@@ -23,7 +23,10 @@
 
 #include <doctest/doctest.h>
 
+#include <cstdio>
 #include <set>
+#include <sstream>
+#include <string>
 
 using namespace tsc;
 using namespace tsc::bench;
@@ -95,6 +98,47 @@ TEST_CASE("Varsayilan yapilandirma sizintili DEGIL") {
     const TrainConfig varsayilan;
     CHECK_GT(varsayilan.evalFirstSeed,
              varsayilan.firstSeed + static_cast<std::uint64_t>(varsayilan.episodes));
+}
+
+// ---------------------------------------------------------------------------
+// 1b. Istenen tohum sayisi GERCEKTEN donuluyor mu?  (regresyon — BULGU 1)
+// ---------------------------------------------------------------------------
+//
+// Hata (3bcc4da ile girdi): `TrainConfig k;` varsayilan degeriyle kuruluyordu
+// (evalSeeds = 5), `opt.episodes` disinda hicbir alan atanmiyordu. Dongu 5
+// tohumda donuyordu ama ekrana 150 yazdiriliyordu. Guc uyarisi da
+// `opt.evalSeeds`'i okudugu icin tetiklenmiyordu — yani guvenceler hesaplama
+// degil EKRANI okuyordu.
+//
+// Bu test, "kisa" bir sey test etmiyor; `runEvaluation` main'in calistirdigi
+// AYNI islev. Uzunluklar farkli olmali VE olculen deger farkli cikmali
+// (AGENTS.md 8.10: esitlik testi once bosa karsi kanitlamali).
+TEST_CASE("Degerlendirme tohum sayisi istenen degerdir ve sonucu DEGISTIRIR") {
+    // (a) config gercekten tasiyor mu?
+    const std::vector<std::uint64_t> bes = evaluationSeeds(evaluationConfig(400, 5));
+    const std::vector<std::uint64_t> yuzElli = evaluationSeeds(evaluationConfig(400, 150));
+    CHECK_EQ(bes.size(), 5u);
+    CHECK_EQ(yuzElli.size(), 150u);
+    // Eski hatada ikisi de 5'e esitti.
+    CHECK_NE(bes.size(), yuzElli.size());
+
+    // (b) main'in calistirdigi ayni islev uzerinden sonuc farkli mi?
+    const Scenario s = testScenario();
+    QLearningController bos;   // bos politika: hicbir sey ogrenmemis
+    const EvaluationRun az = runEvaluation(s, bos, bes);
+    const EvaluationRun cok = runEvaluation(s, bos, yuzElli);
+
+    CHECK_EQ(az.qTravel.size(), 5u);
+    CHECK_EQ(az.fixedTravel.size(), 5u);
+    CHECK_EQ(az.ruleTravel.size(), 5u);
+    CHECK_EQ(cok.qTravel.size(), 150u);
+    CHECK_EQ(cok.fixedTravel.size(), 150u);
+    CHECK_EQ(cok.ruleTravel.size(), 150u);
+
+    // 5 tohum, 150 tohumun alt kumesidir; ortalama yine de farkli cikar.
+    // Esitlik, bayragin yine yok sayildiginin belirtisidir.
+    CHECK_NE(describe(az.fixedTravel).mean, describe(cok.fixedTravel).mean);
+    CHECK_NE(describe(az.qTravel).mean, describe(cok.qTravel).mean);
 }
 
 // ---------------------------------------------------------------------------
@@ -430,3 +474,76 @@ TEST_CASE("Politika dosyasi turun sonunda kesif KAPALI disa birakilir") {
     // Kaydedilen politika "ogrenilmis politika" olmali: kesif yok.
     CHECK_NEAR_T(r.policy.params().epsilon, 0.0, 1e-12);
 }
+#ifdef TSC_TRAIN_BINARY
+
+namespace {
+
+/// `train` ikilisini verilen bayraklarla calistirip ciktiyi toplar.
+std::string trainCikti(const std::string& bayraklar) {
+    const std::string komut =
+        std::string{"'"} + TSC_TRAIN_BINARY + "' " + bayraklar + " 2>&1";
+    std::string cikti;
+    FILE* f = ::popen(komut.c_str(), "r");
+    if (f == nullptr) {
+        return cikti;
+    }
+    char buf[512];
+    while (std::fgets(buf, static_cast<int>(sizeof buf), f) != nullptr) {
+        cikti += buf;
+    }
+    ::pclose(f);
+    return cikti;
+}
+
+/// Cikti satirlari arasindan q-learning OZET satirini (ort +/- sd) bulur.
+/// Karsilastirma satiri da "q-learning" ile baslar; onu "+/-" ayirt eder.
+std::string qOzetSatiri(const std::string& cikti) {
+    std::istringstream is{cikti};
+    std::string satir;
+    std::string bulundu;
+    while (std::getline(is, satir)) {
+        if (satir.rfind("q-learning", 0) == 0 && satir.find("+/-") != std::string::npos) {
+            bulundu = satir;
+        }
+    }
+    return bulundu;
+}
+
+std::string politikaYolu() {
+    return std::string{TSC_SOURCE_DIR} + "/models/q-light.txt";
+}
+
+}  // namespace
+
+// Bu test birim test DEGILDIR ve bilerek oyle davranir: `runEvaluation()`
+// dogru sayida tohum dondugunu kanitlar, ama `main()`'in o islevi dogru
+// girdiyle cagirdigini KANITLAMAZ. Bayrak yok sayilmasi hatasi (BULGU 1)
+// ancak ikili uzerunden yakalanir.
+TEST_CASE("train ARACI: --eval-seeds bayragi GERCEKTEN etkilidir") {
+    const std::string ortak =
+        "--eval-only --policy '" + politikaYolu() + "' --load light --hours 300";
+    const std::string c5 = trainCikti(ortak + " --eval-seeds 5");
+    const std::string c150 = trainCikti(ortak + " --eval-seeds 150");
+
+    REQUIRE_FALSE(c5.empty());     // ikili calisiyor mu?
+    REQUIRE_FALSE(c150.empty());
+
+    // 1) Ekran istenen tohum sayisini yaziyor mu?
+    CHECK(c5.find("DEGERLENDIRME (5 tohum") != std::string::npos);
+    CHECK(c150.find("DEGERLENDIRME (150 tohum") != std::string::npos);
+
+    // 2) Guc uyarisi GERCEK tohum sayisina bagli mi? (5 -> basilmali,
+    //    150 -> basilmamali). Eskiden ikisinde de basilmazdi.
+    CHECK(c5.find("[UYARI]") != std::string::npos);
+    CHECK(c150.find("[UYARI]") == std::string::npos);
+
+    // 3) Olculen deger farkli mi? Bayrak yok sayilsaydi iki cikti da
+    //    5 tohumla doner ve bu satirlar birebir ayni olurdu.
+    const std::string o5 = qOzetSatiri(c5);
+    const std::string o150 = qOzetSatiri(c150);
+    CHECK_FALSE(o5.empty());
+    CHECK_FALSE(o150.empty());
+    CHECK(o5 != o150);
+}
+
+#endif  // TSC_TRAIN_BINARY

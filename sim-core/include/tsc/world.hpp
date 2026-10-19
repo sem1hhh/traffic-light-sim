@@ -134,6 +134,19 @@ struct Metrics {
         return arrived > 0 ? totalTravelTime / static_cast<double>(arrived) : 0.0;
     }
 
+    /// VARIŞ ORANI — sansürü görünür kılar.
+    ///
+    /// `averageTravelTime()` yalnızca **varan** araçların ortalamasıdır; zaman
+    /// aşımında kalanlar hesaba girmez. Bu yüzden tek başına asla okunmamalı:
+    /// 54/90 aracın vardığı bir koşu, sadece o 54'ün ortalamasını raporlar ve
+    /// kolayca geçenler düştüğü için sayı **yanlış yöne** yanılır.
+    /// (denetim.md BULGU 2: korelasyon(varan, sure) = +0.66 gozuldu — daha
+    /// kotu kosul, daha IYI gorunen sure uretiyor.)
+    double arrivedFraction() const noexcept {
+        return spawned > 0 ? static_cast<double>(arrived) / static_cast<double>(spawned)
+                           : 0.0;
+    }
+
     /// L — sistemde bulunan ortalama araç sayısı (zaman-ağırlıklı).
     double averageSystemCount() const noexcept {
         return observedSeconds > 0.0 ? vehicleTimeSum / observedSeconds : 0.0;
@@ -154,12 +167,14 @@ struct Metrics {
     }
 
     /// Bekleme suresi: Faz 3'te OLÇÜLMEYE BAŞLANDI.
+    ///
+    /// `arrived == 0` iken `nullopt` döner, 0.0 DEĞİL. 0.0 dönmüş olsaydı
+    /// **en kötü** koşul (hiç kimse varamadı) **en iyi** bekleme süresini
+    /// raporlamış olurdu — §8.5'teki "ölçülmedi ≠ sıfır" tuzağının kendisi.
+    /// (denetim.md BULGU 2, ilişkili tuzak)
     std::optional<double> averageWaitTime() const noexcept {
-        if (!waitTimeMeasured) {
+        if (!waitTimeMeasured || arrived == 0) {
             return std::nullopt;
-        }
-        if (arrived == 0) {
-            return std::optional<double>{0.0};
         }
         return std::optional<double>{totalWaitTime / static_cast<double>(arrived)};
     }
@@ -282,6 +297,18 @@ public:
     const Metrics& metrics() const noexcept { return metrics_; }
     const WorldConfig& config() const noexcept { return config_; }
     const Network& network() const noexcept { return network_; }
+
+    /// Sansürsüz ortalama sistemde kalış süresi (s).
+    ///
+    /// `Metrics::averageTravelTime()` yalnızca **varan** araçların ortalamasıdır;
+    /// zaman aşımında (gridlock) kalan araçlar hesaba hiç girmez. Bu yüzden o
+    /// metrik tek başına yanıltıcıdır: daha çok gridlock yapan kontrolcü,
+    /// daha **iyi** görünen bir yolculuk süresi üretir. (denetim.md BULGU 2)
+    ///
+    /// Bu metrik ise her **sisteme girmiş** aracı sayar: varanların süresi +
+    /// sistemde takılı kalanların o ana kadar geçen süresi. Hiçbir araç
+    /// ölçümden düşmez. Boş ağda 0.0 döner.
+    double averageTimeInSystem() const noexcept;
 
     /// Bir aracin neden takildigi (StallReason) - None degilse.
     StallReason lastStall() const noexcept { return lastStall_; }

@@ -888,3 +888,107 @@ TEST_CASE("K2 ilk maddesi: ayni seed ayni olcutleri verir") {
     CHECK_EQ(a.first, b.first);
     CHECK_EQ(a.second, b.second);
 }
+
+// ---------------------------------------------------------------------------
+// Sansur (censoring) — denetim.md BULGU 2
+//
+// `averageTravelTime()` yalnizca VARAN araclari sayar. Zaman asiminda kalan
+// (gridlock) araclarin suresi hesaba GIRMEZ; bu da kotu bir kosuyu IYI
+// gosterebilir. Olculdu (saturated, 30 tohum): korelasyon(varan, sure) =
+// +0.66 — daha az varis, daha DUSUK gorunen sure.
+//
+// Buradaki iki metrik arasindaki FARK sansurun kendisidir.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Sansur yokken iki metrik ESITTIR") {
+    // Her arac hedefe ulasirsa (kayip yoksa) iki metrik ayni sonucu vermeli.
+    // Bu, "sansur duzeltilmis" metrigin eski degeri BOZMADIGININ kanitidir.
+    const Network net = tsc::buildNetwork(simAgi());
+    World w{net, testConfig(10), 99};
+    for (int i = 0; i < 1500 && !w.finished(); ++i) {
+        w.step();
+    }
+    const tsc::Metrics& m = w.metrics();
+    REQUIRE_EQ(m.arrived, m.spawned);
+    REQUIRE_GT(m.arrived, 0);
+    CHECK_NEAR_EPS(w.averageTimeInSystem(), m.averageTravelTime());
+    CHECK_NEAR_EPS(m.arrivedFraction(), 1.0);
+}
+
+TEST_CASE("Sansur gorunur: zaman asiminda kalan araclari metrik SAYAR") {
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(30);
+    cfg.timeLimit = 25.0;   // 30 arac 25 saniyede varamaz
+    World w{net, cfg, 4};
+    for (int i = 0; i < 60 && !w.finished(); ++i) {
+        w.step();
+    }
+    REQUIRE(w.timedOut());
+
+    const tsc::Metrics& m = w.metrics();
+    // Sansur GERCEKTEN var mi? (bu test bosa karsi kanitlamali)
+    REQUIRE_LT(m.arrived, m.spawned);
+
+    // Varis orani 1 degil — sansur artik gorunur.
+    CHECK_LT(m.arrivedFraction(), 1.0);
+    CHECK_GT(m.arrivedFraction(), 0.0);
+
+    // Sansursuz metrik, yalnizca varanlari sayan metrikten BUYUKTUR.
+    // Fark, sistemde takili kalan araclarin suresidir.
+    CHECK_GT(w.averageTimeInSystem(), m.averageTravelTime());
+}
+
+TEST_CASE("Varis orani [0,1] araligindadir ve hicbir yerde 1'i asmaz") {
+    const Network net = tsc::buildNetwork(simAgi());
+    WorldConfig cfg = testConfig(30);
+    cfg.timeLimit = 25.0;
+    World w{net, cfg, 7};
+    for (int i = 0; i < 60; ++i) {
+        w.step();
+        const double fr = w.metrics().arrivedFraction();
+        CHECK_GE(fr, 0.0);
+        CHECK_LE(fr, 1.0);
+    }
+}
+
+TEST_CASE("Bos dunyada oran ve sure sifirdir") {
+    World w;
+    CHECK_FALSE(w.ready());
+    CHECK_NEAR_EPS(w.metrics().arrivedFraction(), 0.0);
+    CHECK_NEAR_EPS(w.averageTimeInSystem(), 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// "Olculmedi" ile "SIFIR" ayirimi — denetim.md BULGU 2 (iliskili tuzak)
+//
+// `averageWaitTime()` eskiden `arrived == 0` iken 0.0 donuyordu. Yani EN
+// KOTU kosul (hic kimse varamadi), EN IYI bekleme suresini raporlardi.
+//
+// NOT: Simulasyon icinde bu duruma su an ULAŞILAMIYOR — `waitTimeMeasured`
+// yalnizca arac ulastiginda true oluyor. Yani dal simdi "olu kod". Ama
+// invariant gerekli: bekleme suresi ARACTAN degil, VARISTAN olculdugu icin
+// ileride (orn. sansur duzeltilirken) bu kombinasyon erisilebilir olur.
+// Bu test fonksiyonu DOGDAN dogrular; boylece invariant kirilirsa yakalanir.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Varis yoksa bekleme suresi 0.0 degil OLCELMEMISTIR") {
+    tsc::Metrics m;
+    m.waitTimeMeasured = true;   // bekleme olcum baslatilmis
+    m.arrived = 0;               // ama HICBIR arac varamamis
+    m.totalWaitTime = 0.0;
+
+    // 0.0 donseydi "bekleme yok" sanilirdi; oysa olcum yapilmamistir.
+    const auto v = m.averageWaitTime();
+    CHECK_FALSE(v.has_value());
+    CHECK(v == std::nullopt);
+}
+
+TEST_CASE("Varis varsa bekleme suresi toplami/varan sayisidir") {
+    tsc::Metrics m;
+    m.waitTimeMeasured = true;
+    m.arrived = 4;
+    m.totalWaitTime = 40.0;
+    const auto v = m.averageWaitTime();
+    REQUIRE(v.has_value());
+    CHECK_NEAR_EPS(*v, 10.0);
+}

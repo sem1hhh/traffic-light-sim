@@ -35,4 +35,15 @@ add_executable(run_experiment_tests
 target_include_directories(run_experiment_tests PRIVATE ${CMAKE_SOURCE_DIR}/sim-core/tests)
 target_link_libraries(run_experiment_tests PRIVATE tsc_experiments third_party)
 
+# `train` ikilisi regresyon testi tarafindan DOGRUDAN calistirilir.
+#
+# Neden unit test yetmiyor: `runEvaluation()`'i test etmek, `main()`'in o
+# islevi dogru girdiyle cagirdigini KANITLAMAZ. Bayragin yok sayilmasi
+# hatasi ancak ikili uzerunden yakalanir. (denetim.md BULGU 1)
+add_dependencies(run_experiment_tests train)
+target_compile_definitions(run_experiment_tests PRIVATE
+    TSC_TRAIN_BINARY="$<TARGET_FILE:train>"
+    TSC_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
 add_test(NAME experiment_unit_tests COMMAND run_experiment_tests)

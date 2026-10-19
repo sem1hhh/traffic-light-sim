@@ -36,8 +36,20 @@ struct PairedTResult {
     double ciLow = 0.0;        ///< ortalama farkin %95 guven arligi
     double ciHigh = 0.0;
 
+    /// Farklarin VARYANSI YOK (tumu birebir ayni). Bu durumda t, p ve guven
+    /// araligi TANIMSIZDIR; `tStat`, `pTwoSided`, `ciLow`, `ciHigh` NaN'dir.
+    ///
+    /// Neden NaN ve eski gibi 1.0e6 degil: sifir varyans, "cok anlamlı"
+    /// degil "istatistiksel iddia kurulamiyor" demektir. Sihirli bir buyuk
+    /// sayi, sayisal bir artefakti da anlamli gosterebilirdi.
+    bool degenerate = false;
+
     /// Ortalama farkin anlamli olup olmadigi (p < 0.05).
-    bool significant() const noexcept { return pTwoSided < 0.05; }
+    ///
+    /// Degenerate durumda asla "anlamli" DONMEZ: varyans tahmini olmadan
+    /// anlamli iddia kurulamaz. (Tanimsiz ile "fark yok" AYNI SEY DEGILDIR;
+    /// raporlayici `degenerate` bayragini ayrica gostermek zorundadir.)
+    bool significant() const noexcept { return !degenerate && pTwoSided < 0.05; }
 };
 
 /// Eslestirilmis t-testi. a[i] ve b[i] ayni deney kosuluna ait olmalidir.
@@ -57,6 +69,20 @@ ConfidenceInterval describe(const std::vector<double>& x);
 
 /// Student t dagiliminin kumulatif fonksiyonu (P(T <= t)).
 double studentTCdf(double t, std::size_t df);
+
+/// Student t dagiliminin TERSI: studentTCdf(t, df) = p olan t degeri.
+///
+/// Guven araligi icin gerekir. p-degeri t-dagilimiyla hesaplanirken araligin
+/// normal kuantili (1.9599) ile hesaplanmasi TUTARSIZLIKTI: n=5'te dogru
+/// kritik deger 2.776'dir. Dogru aralik eski araligin 1.416 KATIDIR, yani
+/// dogrusu %41 daha GENISTIR. (denetim.md BULGU 3)
+///
+/// Bisection ile bulunur: `studentTCdf` zaten mevcut ve dogrulanmis; onun
+/// tersini yeniden icat etmek yerine onu kullanmak daha az hata kaynagi.
+double studentTQuantile(double p, std::size_t df);
+
+/// Guven araligi kritik degeri: %95 iki kuyruklu -> P(T <= t) = 1 - 0.025.
+double tCritical95(std::size_t df);
 
 /// p degerini 3 ondaliga bicimlendirir (tabloya yazmak icin).
 std::string formatP(double p);

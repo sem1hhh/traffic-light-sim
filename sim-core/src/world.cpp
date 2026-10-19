@@ -719,6 +719,18 @@ void World::integrateSubStep(double dt) {
 // Olcum
 // ---------------------------------------------------------------------------
 
+double World::averageTimeInSystem() const noexcept {
+    // Varanlarin suresi zaten birikti. Sistemde KALAN her arac icin de
+    // o ana kadar gecen sure eklenir; boylece hicbir arac olcumden dusmez.
+    double toplam = metrics_.totalTravelTime;
+    int sayi = metrics_.arrived;
+    for (const Vehicle& v : vehicles_) {
+        toplam += time_ - v.spawnTime;
+        ++sayi;
+    }
+    return sayi > 0 ? toplam / static_cast<double>(sayi) : 0.0;
+}
+
 std::uint64_t World::digest() const {
     std::uint64_t h = kFnvOffset;
     hashDouble(h, time_);

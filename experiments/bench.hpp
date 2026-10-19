@@ -39,6 +39,14 @@ struct RunResult {
     std::string controller;
 
     double averageTravelTime = 0.0;
+    /// Sansursuz ortalama sistemde kaliss suresi (s).
+    ///
+    /// `averageTravelTime` yalnizca VARAN araclari sayar; gridlock olan kosuda
+    /// kotu kosul IYI gorunur. Iki kontrolcunun bitirme orani farkliysa
+    /// karsilastirma BU metrikle yapilmalidir. (denetim.md BULGU 2)
+    double averageTimeInSystem = 0.0;
+    /// varan / uretilen — sansuru gorunur kilar. 1.0 = hepsi vardi.
+    double arrivedFraction = 0.0;
     double averageWaitTime = 0.0;   ///< -1 => olculmedi
     int arrived = 0;
     int spawned = 0;
