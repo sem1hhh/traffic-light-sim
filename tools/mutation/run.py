@@ -90,23 +90,41 @@ def force_relink():
             os.remove(p)
 
 
-def run_tests(changed_paths):
-    """Değişen yola göre test ikililerini koşturur. (basari, cikti) döner."""
-    uygun = sorted({p for pref, p in TEST_BINARIES.items()
-                    if any(cp.startswith(pref) for cp in changed_paths)})
-    if not uygun:
-        return None, ""
+def run_tests():
+    """ÜÇ test ikilisini de koşturur. (basari, cikti) döner.
+
+    Yola göre filtreleme YAPILMAZ — bu bir hataydı ve düzeltildi:
+    `controllers/q_learning.cpp`'deki `mergeFrom` mutasyonu yalnızca
+    `controllers/` altındaki ikiliyi koşturuyordu, ama bu davranışın testi
+    `experiments/train_test.cpp`'deydi. Sonuç: iki mutasyon "KACIRILDI"
+    raporlanmıştı, oysa elle koşturulunca kırmızıydılar (2 ve 5 assertion).
+
+    Ayrıca her mutasyon kendi klasöründeki testi değil, **sistem genelindeki
+    davranış**ı bozabilir; katman sınırı (sim-core / controllers / experiments)
+    bunu garanti etmez. Üçünü birden koşturmak en ucuz ve en güvenli yoldur.
+    """
     tum = ""
-    for b in uygun:
+    adlar = []
+    for b in sorted(set(TEST_BINARIES.values())):
         if not os.path.exists(b):
             return False, "test ikili yok: " + b
         r = sh([b])
         tum += r.stdout
         tum += r.stderr
-    m = re.search(r"Status: (\w+)", tum)
-    if not m:
-        return False, "Status satiri bulunamadi"
-    return (m.group(1) == "SUCCESS"), tum
+        adlar.append(os.path.basename(b))
+
+    # TÜM ikililerin sonucu kontrol edilir — `re.search` İLK "Status:"
+    # satırını bulur ve üç ikili çalıştırıldığında ilk ikisi yeşil kalıp
+    # üçüncüsü kırmızı olabilir. Böylece doğru çalışan mutasyonlar
+    # "KACIRILDI" diye raporlanırdı (ilk düzeltme denemesinde 16 vaka
+    # böyle yanlış çıktı). `findall` + hepsi SUCCESS şartı gerekir.
+    durumlar = re.findall(r"Status: (\w+)", tum)
+    if len(durumlar) != len(adlar):
+        return False, "Status satiri bulunamadi (%d/%d)" % (len(durumlar), len(adlar))
+    basarisiz = [a for a, d in zip(adlar, durumlar) if d != "SUCCESS"]
+    if basarisiz:
+        return False, "kirmizi: " + ", ".join(basarisiz)
+    return True, tum
 
 
 def main():
@@ -147,13 +165,8 @@ def main():
             restore([dosya])
             continue
 
-        ok, cikti = run_tests([dosya])
-        if ok is None:
-            # Bu yola ait test yok: mutasyon dogrulanamaz. "GECTI" DEGILDIR.
-            print("%-56s TEST YOK" % ad)
-            sayim["KACIRILDI"] += 1
-            aciklar.append((ad, "TEST YOK — bu yolda test bulunmuyor"))
-        elif ok:
+        ok, _ = run_tests()
+        if ok:
             print("%-56s KACIRILDI" % ad)
             sayim["KACIRILDI"] += 1
             aciklar.append((ad, "KACIRILDI — testler yeşil kaldi"))
@@ -166,7 +179,7 @@ def main():
     # Son bir dogrulama: her sey geri alindiktan sonra testler yeşil mi?
     force_relink()
     sh(["cmake", "--build", BUILD_DIR])
-    ok, _ = run_tests(["sim-core/", "controllers/", "experiments/"])
+    ok, _ = run_tests()
 
     print("\n--- OZET ---")
     print("YAKALANDI   : %d" % sayim["YAKALANDI"])

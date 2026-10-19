@@ -8,8 +8,10 @@ Sözleşme ve uyarılar için `run.py` dosyasına ve README.md'ye bakın.
 "UYGULANMADI" raporlanır — bu, korumanın kaybolduğu anlamına gelir ve
 sessizce geçilmez. Kod değiştikçe bu liste bayatlar.
 
-SON KOŞU (2026-10-18): 25 vaka — 22 YAKALANDI, 3 KACIRILDI, 0 DERLENMEDI.
-Üç "KACIRILDI"nın ikisi DOĞRULANMIŞ BOŞLUK DEĞİL:
+SON KOŞU (2026-10-19): 25 vaka — **23 YAKALANDI, 2 KACIRILDI, 0 DERLENMEDI,
+0 UYGULANMADI.** Geri aldıktan sonra testler yeşil.
+
+### İki "KACIRILDI" — ikisi de doğrulanmış boşluk DEĞİL
 
   1. "minGreen: gecis kapisindan kaldirilir (YEDEK)".
      minGreen ÜÇ ayrı yerde zorlanır: `advanceState` geciş kapısı,
@@ -19,15 +21,24 @@ SON KOŞU (2026-10-18): 25 vaka — 22 YAKALANDI, 3 KACIRILDI, 0 DERLENMEDI.
      tekrarın tek başına silinmesidir — gerçek bir boşluk değildir.
      `requestSwitch` ve `canSwitch` vakaları YAKALANDI; asıl gate budur.
 
-  3. "bekleme sutunu olceilmemis degerleri elemez".
-     `bench_main.cpp` bir `main()`'dir ve testi YOKTUR. Bu vaka "KACIRILDI"
-     diyor; doğru okuma "BU YOLDA HİÇ TEST YOK"dur. Raporlanan bir bulgu.
+  2. "bekleme sutunu olceilmemis degerleri elemez".
+     `bench_main.cpp` bir `main()`'dir ve testi YOKTUR. Doğru okuma
+     "BU YOLDA HİÇ TEST YOK"tur, "testler geçti" değil.
 
-GERÇEK boşluk (kapatılmadı, raporlandı):
-  2. "bilinen maskesi AND ile birlesir (OR yerine)" —
-     `q_learning.cpp::mergeFrom` içindeki `kStateKnown_` birleşimi
-     ezilirse hiçbir test kırmızıya dönmüyor. Yani kavşaklar arası
-     "hangi durum öğrenildi" bilgisi korumasız.
+### Önceki koşunun YANLIŞ "gerçek boşluk" kararı (düzeltildi)
+
+`run_tests` yalnızca **değişen dosyanın klasöründeki** test ikilisini
+koşturuyordu. `mergeFrom` `controllers/` altında; ama bu davranışın testi
+`experiments/train_test.cpp`'de. İki mutasyon bu yüzden "KACIRILDI"
+raporlanmıştı ve bunlardan biri raporda "TEK GERÇEK BOŞLUK" diye
+yazılmıştı. **Yanlıştı.** `run_tests` artık ÜÇ ikilisini de koşturuyor;
+iki vaka da YAKALANDI — bağımsız denetimin elle yaptığı ölçüme birebir
+uyuyor (2 kırmızı / 5 kırmızı).
+
+> Not: aynı düzeltmenin ilk denemesi `re.search` ile İLK `Status:` satırını
+> okuyordu; üç ikili çalıştırılınca ilk ikisi yeşil, üçüncüsü kırmızı
+> olabiliyordu ve **16 vaka** ters raporlandı. `findall` + "hepsi SUCCESS"
+> şartı gerekir.
 """
 
 CASES = [
