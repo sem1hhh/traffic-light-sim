@@ -62,8 +62,10 @@ struct EpisodeOutcome {
 /// Tek bir bölümü koşar ve **öğrenilen tabloyu modele geri yazar**.
 ///
 /// `writeBack == false` ise model DEĞİŞTİRİLMEZ. Değerlendirmede bu
-/// kullanılır: epsilon=0 olsa bile `onReward` Q'yu günceller, yazma
-/// yapılırsa ölçtüğümüz politika değişmiş olur.
+/// kullanılır: epsilon=0 olsa bile `onReward` Q'yu **koşu içinde**
+/// günceller; yazma kapalı olduğu için değişiklik modele geri yansımaz ve
+/// sonraki bölüm aynı başlangıç modelinden başlar (koşular arası
+/// birikim yok). "Model dondurulur" denmez — bkz. train.cpp yorumu.
 ///
 /// Bu işlev test edilebilir olması için kasıtlı olarak dışarıya açıktır:
 /// önceki kurguda anonim namespace içindeydi ve "değerlendirme modeli

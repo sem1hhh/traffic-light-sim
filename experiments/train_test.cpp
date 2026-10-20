@@ -147,7 +147,9 @@ TEST_CASE("Degerlendirme tohum sayisi istenen degerdir ve sonucu DEGISTIRIR") {
 
 TEST_CASE("Kesif KAPALI bir kosuda Q tablosu YINE DE guncellenir") {
     // Bu bir "dogru calisiyor" testi: eger bu TEST gecmezse
-    // degerlendirmeyi dondurma onlemi gereksiz sayilirdi.
+    // degerlendirmede geri yazmayi KAPMA onlemi gereksiz sayilirdi.
+    // (Not: ogrenim koSU ICINDE devam eder; onlem modelin geri
+    // yazilmasini engeller, bolumler arasi birikimi sifirlar.)
     const Network net = buildNetwork(buildScenarioGrid(testScenario()));
     WorldConfig cfg;
     cfg.vehicleCount = 30;
@@ -267,7 +269,7 @@ TEST_CASE("Egitim ve degerlendirme tohumlari GERCEKTEN AYRI (fonksiyon uzerinden
     }
 }
 
-TEST_CASE("train() degerlendirme sirasinda modeli dondurur") {
+TEST_CASE("train() degerlendirme sonrasi modeli DEGISTIRMEZ") {
     // train() icindeki degerlendirme writeBack=false kullanir. Bunu
     // DOLAYLI olarak olcuyoruz: egitim bolum sayisi 1 iken politika,
     // yalnizca TEK egitim kosusundan etkilenmis olmali.
@@ -284,8 +286,8 @@ TEST_CASE("train() degerlendirme sirasinda modeli dondurur") {
     CHECK_GT(r.policy.meanAbsQ(), 0.0);
 
     // KARSILASTIRMA: train() icindeki TEK egitim kosusunu elle, dogrudan
-    // cagirip ayni modeli elde ediyoruz. Degerlendirme modeli dondurdugu
-    // icin bu ikisi BIREBIR ayni olmali.
+    // cagirip ayni modeli elde ediyoruz. Degerlendirme modeli geri
+    // yazmadigi icin (writeBack=false) bu ikisi BIREBIR ayni olmali.
     //
     // (Onceki deneme train()'i train() ile karsilastiriyordu; ikisi de
     //  degerlendirme yaptigi icin fark yakalanamiyordu. Mutasyon testi

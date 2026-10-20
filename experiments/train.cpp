@@ -15,7 +15,7 @@
 namespace tsc {
 namespace bench {
 
-/// Bir bolumu DONER DONDURerek calistirir ve ogrenilen tablolari modele
+/// Bir bolumu sonuna kadar calistirir ve ogrenilen tablolari modele
 /// geri yazar.
 ///
 /// Neden runOnce() yetmiyor: runOnce kontrolcuyu fabrikadan URETIR ve kosu
@@ -26,8 +26,12 @@ namespace bench {
 /// `writeBack` false ise ogrenilen tablo modele YAZILMAZ. Degerlendirmede
 /// kullanilir: epsilon=0 olsa bile onReward Q'yu gunceller (olculdu: bir
 /// kosuda 594 geri bildirim, ort|Q| 0 -> 0.0039, 7 durum ogrenildi), yani
-/// yazma yapilirsa "olcduk" politikamiz degismek olurdu. Gecisin anlamini
-/// yitirmemek icin ogrenim de durdurulur.
+/// yazma yapilirsa "olcduk" politikamiz degismek olurdu.
+///
+/// DIKKAT — "dondurma" ifadesi YANLISTIR: ogrenim koSU ICINDE devam eder;
+/// yalnizca ogrenilen tablo modele geri YAZILMAZ. Boylece etki tek kosuyla
+/// sinirli kalir: siradaki degerlendirme bolumu AYNI baslangic modelinden
+/// baslar, bolumler arasi birikim olmaz. Modeller arasi degisiklik = 0.
 EpisodeOutcome runEpisode(const Scenario& scenario, QLearningController& model,
                           std::uint64_t seed, bool writeBack) {
     const Network net = buildNetwork(buildScenarioGrid(scenario));
