@@ -1,14 +1,17 @@
-// render/src/render_canvas.h — izgara cizimi + FPS logu (Faz 7 ilk adimi).
+// render/src/render_canvas.h — simulasyonu cizen canvas (Faz 7).
 //
-// Bu canvas SIMULASYONU CALISTIRMAZ. Su anlik gorevi: (1) izgara cizgileri
-// cizmek — izgara editörünün (İG-1) gorsel tohumu, (2) FPS'i olcmek ve
-// loglamak — İOG-2'nin ilk kaniti. Simulasyon dongusu Faz 7'nin sonraki
-// adiminda sim-core World'u baglaninca eklenecek.
+// Bu canvas bir SimScene sahiplenir ve GERCEK zamandan bagimsiz bir tempoda
+// (saniyede N simulasyon adimi) ilerletir. Her karede dunya durumunu OKUR:
+//   - yol hucreleri ve kavsaklar
+//   - trafik isiklari (fazla senkron renkler — IG-2)
+//   - araclar (IDM konumlari)
+// Is mantigi yok; hepsi sim-core (AGENTS.md: render is mantigi yazmaz).
 
 #pragma once
 
 #include "gBaseCanvas.h"
 #include "render_app.h"
+#include "sim_scene.h"
 
 namespace tsc {
 namespace render {
@@ -23,9 +26,15 @@ public:
     void draw() override;
 
 private:
-    RenderApp* root;
+    // Izgara hucre cizgisine piksel cevirici. Grid 9x7; hucresel olcekleme.
+    void drawRoads();
+    void drawJunctions();
+    void drawVehicles();
 
-    // FPS logu: her 60 karede bir ortalama yaz.
+    RenderApp* root;
+    SimScene scene;
+
+    // FPS logu.
     int framecounter = 0;
     double fpssum = 0.0;
 };

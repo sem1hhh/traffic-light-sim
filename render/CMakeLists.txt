@@ -63,9 +63,33 @@ add_executable(tsc_render
     src/main.cpp
     src/render_app.cpp
     src/render_canvas.cpp
+    src/sim_scene.cpp
+
+    # sim-core ve controllers kaynaklari DOGRUDAN buraya derlenir (kutuphane
+    # olarak add_subdirectory DEGIL). Sebep: sim-core/CMakeLists.txt test
+    # hedeflerini (doctest/third_party) de cagiriyor; render ayri bir proje ve
+    # motor + simulasyonu tek basina derleyebilmeli. Ayrica kural: o dizinlere
+    # DOKUNULMAZ. Kaynak dosyalar oldugu gibi okunur, hicbiri degistirilmez.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/rng.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/grid.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/network.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/world.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/intersection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/controller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/car_following.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/controller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/fixed_time.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/threshold.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/q_learning.cpp
 )
 
-target_include_directories(tsc_render PRIVATE src)
+# sim-core ve controllers basliklari.
+target_include_directories(tsc_render PRIVATE
+    src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers
+)
 
 # Motor include yollari PUBLIC verildigi icin sadece baglanti yeterli.
 target_link_libraries(tsc_render PRIVATE GlistEngine)
@@ -75,7 +99,7 @@ target_link_libraries(tsc_render PRIVATE GlistEngine)
 # yalnizca kendi kaynak dosyalarimiza uygulanir.
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     set_source_files_properties(
-        src/main.cpp src/render_app.cpp src/render_canvas.cpp
+        src/main.cpp src/render_app.cpp src/render_canvas.cpp src/sim_scene.cpp
         PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra"
     )
 endif()

@@ -1,9 +1,12 @@
-// render/src/render_canvas.cpp — izgara + FPS logu.
+// render/src/render_canvas.cpp — simulasyon cizimi.
 //
 // Cizim API'si: global gDrawLine/gDrawRectangle + setColor (core/gRenderer.h).
-// FPS: root->getFramerate() — motorun kendi olcumu.
+// FPS: root->getElapsedTime() (deltaTime, sn) — simulasyon adimlarini kare
+// hizindan bagimsiz ilerletmek icin bunu akumulatore veriyoruz.
 
 #include "render_canvas.h"
+
+#include "tsc/intersection.hpp"
 
 #include <iostream>
 
@@ -11,14 +14,22 @@ namespace tsc {
 namespace render {
 
 namespace {
-// Izgara: 20 x 12 hucre, hucre basina 60 piksel.
-constexpr int kCellSize = 60;
-constexpr int kGridCols = 20;
-constexpr int kGridRows = 12;
-constexpr int kFpsLogInterval = 60;  // kare
+// Izgara cizimi: 9x7 hucre, hucre basina piksel. 1280x720 pencereye sigar.
+constexpr int kCellPx = 60;
+constexpr int kGridCols = 9;
+constexpr int kGridRows = 7;
+constexpr int kFpsLogInterval = 120;  // kare
+
+// Izgarayi pencerenin ortasina hizala.
+constexpr int kOriginX = (1280 - kGridCols * kCellPx) / 2;
+constexpr int kOriginY = (720 - kGridRows * kCellPx) / 2;
+
+// Hucre koordinatindan (cell-center, 0.5 ekli) piksele.
+float px(double cx) { return static_cast<float>(kOriginX) + static_cast<float>(cx * kCellPx); }
+float py(double cy) { return static_cast<float>(kOriginY) + static_cast<float>(cy * kCellPx); }
 }  // namespace
 
-RenderCanvas::RenderCanvas(RenderApp* root) : gBaseCanvas(root) {
+RenderCanvas::RenderCanvas(RenderApp* root) : gBaseCanvas(root), scene(1, 1) {
     this->root = root;
 }
 
@@ -27,48 +38,102 @@ RenderCanvas::~RenderCanvas() {
 
 void RenderCanvas::setup() {
     std::cout << "[render] canvas setup: " << getWidth() << "x" << getHeight()
-              << "  grid " << kGridCols << "x" << kGridRows
-              << "  hucre=" << kCellSize << "px" << std::endl;
+              << "  izgara " << kGridCols << "x" << kGridRows
+              << "  sim hizi: " << scene.stepsPerSecond() << " adim/sn" << std::endl;
 }
 
 void RenderCanvas::update() {
-    // FPS topla ve periyodik logla (İOG-2 kaniti).
+    // Simulasyonu kare hizindan BAGIMSIZ ilerlet: gecen gercek sureyi ver.
+    scene.advance(static_cast<double>(root->getElapsedTime()));
+
+    // FPS logu (trafik akarken olculur).
     fpssum += static_cast<double>(root->getFramerate());
     ++framecounter;
     if (framecounter >= kFpsLogInterval) {
-        const double avg = fpssum / static_cast<double>(framecounter);
-        std::cout << "[render] FPS ortalamasi (" << framecounter
-                  << " kare): " << avg << std::endl;
+        std::cout << "[render] FPS ortalamasi (" << framecounter << " kare): "
+                  << (fpssum / static_cast<double>(framecounter))
+                  << "  sim-sn: " << scene.world().time() << std::endl;
         framecounter = 0;
         fpssum = 0.0;
     }
 }
 
 void RenderCanvas::draw() {
-    // Arka plan.
     clearColor(18, 24, 22);
+    drawRoads();
+    drawJunctions();
+    drawVehicles();
+}
 
-    // Izgara cizgileri — İG-1 izgara editörünün gorsel tohumu.
-    setColor(60, 80, 70);
-    const int w = kGridCols * kCellSize;
-    const int h = kGridRows * kCellSize;
-    for (int c = 0; c <= kGridCols; ++c) {
-        gDrawLine(static_cast<float>(c * kCellSize), 0.0f,
-                  static_cast<float>(c * kCellSize), static_cast<float>(h));
+void RenderCanvas::drawRoads() {
+    const Network& net = scene.network();
+    setColor(52, 60, 56);
+    for (const LaneId lid : net.allLanes()) {
+        const Lane& lane = net.lane(lid);
+        for (const Vec2i& c : lane.cells) {
+            // Her serit hucresini kare olarak doldur.
+            gDrawRectangle(px(static_cast<double>(c.x)) - kCellPx / 2.0f,
+                           py(static_cast<double>(c.y)) - kCellPx / 2.0f,
+                           static_cast<float>(kCellPx), static_cast<float>(kCellPx),
+                           true);
+        }
     }
-    for (int r = 0; r <= kGridRows; ++r) {
-        gDrawLine(0.0f, static_cast<float>(r * kCellSize),
-                  static_cast<float>(w), static_cast<float>(r * kCellSize));
-    }
+}
 
-    // Kenar: izgaranin disini biraz karart (odak).
-    setColor(18, 24, 22);
-    gDrawRectangle(static_cast<float>(w), 0.0f,
-                   static_cast<float>(getWidth() - w),
-                   static_cast<float>(getHeight()), true);
-    gDrawRectangle(0.0f, static_cast<float>(h),
-                   static_cast<float>(getWidth()),
-                   static_cast<float>(getHeight() - h), true);
+void RenderCanvas::drawJunctions() {
+    const Network& net = scene.network();
+    const World& w = scene.world();
+
+    for (const JunctionId j : net.signalJunctions()) {
+        const Node& node = net.node(j);
+        const Intersection& inter = w.intersection(j);
+
+        // Kavsak hucresi (daha acik renk).
+        setColor(70, 78, 74);
+        gDrawRectangle(px(static_cast<double>(node.cell.x)) - kCellPx / 2.0f,
+                       py(static_cast<double>(node.cell.y)) - kCellPx / 2.0f,
+                       static_cast<float>(kCellPx), static_cast<float>(kCellPx), true);
+
+        // Isik gostergeleri: her kol icin kucuk renkli kare (fazla senkron).
+        // Kol basina konum: kolun disina dogru kucuk bir kare.
+        const float r = static_cast<float>(kCellPx) * 0.18f;
+        for (const Dir arm : inter.arms()) {
+            // Kolun merkez yonu: hucre disinda, kol yonunde.
+            double ox = 0.0, oy = 0.0;
+            switch (arm) {
+                case Dir::North: oy = -0.5; break;
+                case Dir::South: oy = 0.5; break;
+                case Dir::West:  ox = -0.5; break;
+                case Dir::East:  ox = 0.5; break;
+            }
+            const float cxp = px(static_cast<double>(node.cell.x) + ox);
+            const float cyp = py(static_cast<double>(node.cell.y) + oy);
+
+            // Renk: yesil / sari / kirmizi (faz durumuyla senkron).
+            if (inter.hasGreen(arm)) {
+                setColor(60, 220, 90);       // yesil
+            } else if (inter.state() == SignalState::Yellow &&
+                       phaseOfDirection(arm) == inter.phase()) {
+                setColor(240, 210, 40);      // sari (bu faz sarida)
+            } else {
+                setColor(220, 60, 50);       // kirmizi
+            }
+            gDrawRectangle(cxp - r, cyp - r, r * 2.0f, r * 2.0f, true);
+        }
+    }
+}
+
+void RenderCanvas::drawVehicles() {
+    const World& w = scene.world();
+    setColor(235, 240, 245);
+    for (const Vehicle& v : w.vehicles()) {
+        if (!v.valid()) {
+            continue;
+        }
+        const Vec2d p = scene.lanePointAt(v.currentLane, v.position);
+        const float r = static_cast<float>(kCellPx) * 0.22f;
+        gDrawRectangle(px(p.x) - r, py(p.y) - r, r * 2.0f, r * 2.0f, true);
+    }
 }
 
 }  // namespace render
