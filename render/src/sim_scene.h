@@ -54,6 +54,18 @@ public:
     /// Simulasyon durdu mu (tum araclar vardi ya da zaman asimi/tikanma)?
     bool stopped() const;
 
+    // --- Ev / P tuslari (IG-2 kontrol tuslari) -------------------------------
+    /// Simulasyonu AYNI tohumla basa dondurur (Home tusu). world_/driver_
+    /// sifirdan yeniden kurulur; adim hizi korunur, biriktirici sifirlanir.
+    /// NOT: yalnizca render katmanindaki sahiplenme yeniden kurulur;
+    /// sim-core/controls koduna dokunulmaz (World = deger uyesi, SignalDriver
+    /// World* tutar — her ikisi de yerinde yeniden atanabilir).
+    void reset();
+
+    /// Duraklat / devam et (P tusu). Duraklatilmisken advance() adim atmaz.
+    bool paused() const noexcept { return paused_; }
+    void setPaused(bool p) noexcept { paused_ = p; }
+
     // --- Cizim icin OKUMA erisimi (asla yazma) -------------------------------
     const World& world() const noexcept { return world_; }
     const Network& network() const noexcept { return net_; }
@@ -71,12 +83,29 @@ public:
     /// yalnizca lanePointAt'i iki noktadan cagirip yonu hesaplar.
     double laneHeadingAt(LaneId lane, double distMeters) const;
 
+    /// Bir seridin TAM merkez-yolu (from-dugum -> cells -> to-dugum), IZGARA
+    /// koordinatinda ve metre cinsinden uzunluk sirasina gore. Debug katmaninda
+    /// serit merkez cizgisini cizmek icin. Not: bu yol ARAC OFSETI ICERMEZ
+    /// (yolun kendisidir); araclar sag-ofsetle cizilir.
+    std::vector<Vec2d> laneCenterPath(LaneId lane) const;
+
+    /// Seritte `distMeters` konumundaki GIDIS YON VEKTORU (izgara x, z).
+    /// Kaynak: laneCenterPath GEOMETRISI (konum türevi DEGIL). 0 hucreli
+    /// kollarda (dikey kollar) konum türevi sifirdi; geometri dogru yonu verir.
+    Vec2d laneDirAt(LaneId lane, double distMeters) const;
+
 private:
     void stepOnce();
+
+    /// Fabrika (kurucu ve reset() aynisini kullanir): sabit zamanli kontrolcu.
+    static SignalDriver::ControllerFactory defaultFactory();
 
     Network net_;
     World world_;
     SignalDriver driver_;
+
+    std::uint64_t seed_ = 0;    ///< reset() ayni tohumla yeniden kurar (Home)
+    bool paused_ = false;       ///< P tusu: advance() adim atmaz
 
     int stepsPerSecond_ = 1;
     double accumulator_ = 0.0;   ///< toplanan simulasyon-saniyesi (0 <= x < 1)

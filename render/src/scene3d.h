@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "coords.h"
 #include "tsc/network.hpp"
 #include "tsc/types.hpp"
 #include "tsc/world.hpp"
@@ -53,6 +54,17 @@ public:
     /// Bir arac konumunu (izgara biriminde kayan-nokta) donmus olarak ciz.
     /// `headingRad` yon acisi; araba modeli -Z'ye bakar varsayilir.
     void drawCar(float simX, float simZ, double headingRad);
+
+    // --- HATA AYIKLAMA KATMANI (D tusu) ------------------------------------
+    /// Ince 3B zemin cizgisi (X,Z uc noktalari, dunya birimi). Serit merkez
+    /// cizgileri icin.
+    void drawDebugLine(double x0, double z0, double x1, double z1);
+    /// Bir aracin AYAK-IZI kutusunu ciz. `centerX/Z` yol MERKEZIDIR; sagdan
+    /// gidiş ofseti burada uygulanir (coords.h). 3B arac bu kutunun ustunde.
+    void drawVehicleBox(double centerX, double centerZ, double headingRad);
+    /// Aracin GIDIS YONUNU gosteren kisa ok (kutunun onunden, serit yonunde).
+    /// `nextX/nextY` seritteki bir sonraki nokta; ok ona dogru uzanir.
+    void drawDebugArrow(double centerX, double centerZ, double dirX, double dirZ);
 
 private:
     void setupCameraAndLight(int w, int h);

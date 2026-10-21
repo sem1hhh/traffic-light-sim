@@ -25,11 +25,15 @@ public:
     void setup() override;
     void update() override;
     void draw() override;
+    void keyPressed(int key) override;
 
 private:
     // 3B spike cizimi (Kenney modelleri + izometrik kamera). Basarisiz olursa
     // false doner ve cizim2D'ye dusur.
     void drawScene3D();
+    // Hata ayiklama katmani (D tusu): serit merkez cizgileri + arac kutulari.
+    // 3B arabalar bu kutularin ustunde durmali.
+    void drawDebugLayer();
     //2D yedek cizim (spike oncesi).
     void drawRoads();
     void drawJunctions();
@@ -38,6 +42,11 @@ private:
     RenderApp* root;
     SimScene scene;
     Scene3D scene3d;
+
+    // Hata ayiklama katmani acik mi? (D tusu ile acilir/kapanir.)
+    bool debuglayer = false;
+    // Yon logu sayaci (debug katmaninda ~2 sn'de bir omurga/kol acisi basar).
+    int yonlogcounter_ = 0;
 
     // FPS logu.
     int framecounter = 0;

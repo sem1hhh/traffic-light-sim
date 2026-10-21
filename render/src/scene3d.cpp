@@ -20,10 +20,12 @@ constexpr float kFovDeg = 22.0f;
 constexpr float kCamDist = 34.0f;
 constexpr float kCellWorld = 1.0f;   // 1 izgara hucresi = 1 dunya birimi
 
-// Arac yonu: Kenney arabalari -Z'ye bakar; sim yon acisindan donmeye cevirir.
-// KULLANICI GOZLEMİ (2026-10-21): 180 ile araclar yola DIK duruyordu (90° hata).
-// 90° eklenerek 270 yapildi. Hala dik gorunurse 90 <-> 270 arasinda cevrilecek.
-constexpr float kCarYawOffsetDeg = 270.0f;
+// Hata ayiklama katmani (D tusu) cizgileri zeminin biraz ustunde; z-fight yok.
+constexpr float kDebugY = 0.05f;
+
+// (2026-10-22) kCarYawOffsetDeg KALDIRILDI: arac yonu artik sabit ofsetle
+// degil, serit yon vektorunden coords.h carYawDeg() ile hesaplanir. Eski 270
+// ofseti araci kutuya ~90 DIK birakiyordu (olcum: model on ekseni +Z).
 }  // namespace
 
 Scene3D::Scene3D(int viewportWidth, int viewportHeight) {
@@ -93,15 +95,81 @@ void Scene3D::drawJunctionTile(const Vec2i& cell) {
 
 void Scene3D::drawCar(float simX, float simZ, double headingRad) {
     if (!carloaded_) return;
-    car_.setPosition(simX * kCellWorld - centerx_,
+    // Sagdan gidiş: arac yol MERKEZINDEN saga kayar (coords.h). Boylece karsi
+    // yonler AYNI cizgide kalmaz.
+    double wx = 0.0, wz = 0.0;
+    applyLaneOffset(static_cast<double>(simX), static_cast<double>(simZ),
+                    headingRad, wx, wz);
+
+    car_.setPosition(static_cast<float>(wx) * kCellWorld - centerx_,
                      0.0f,
-                     simZ * kCellWorld - centerz_);
-    // Sim yon acisi -> derece. Araba modeli -Z'ye bakar (kCarYawOffsetDeg).
-    const float yawDeg = static_cast<float>(headingRad * 180.0 / 3.14159265358979) +
-                         kCarYawOffsetDeg;
-    car_.setOrientation(glm::vec3(0.0f, glm::radians(yawDeg), 0.0f));
-    car_.setScale(0.6f);
+                     static_cast<float>(wz) * kCellWorld - centerz_);
+    // YON: sabit ofset YOK. Serit yon vektorunden (atan2(dz, dx)) + modelin
+    // olculmus on ekseni (coords.h kCarModelFrontAxisDeg) ile hesaplanir.
+    const double dirX = std::sin(headingRad);
+    const double dirZ = std::cos(headingRad);
+    car_.setOrientation(glm::vec3(0.0f, glm::radians(static_cast<float>(carYawDeg(dirX, dirZ))), 0.0f));
+    // Araç boyu coords.h kCarModelScale ile 4.5 m'ye (0.45 dunya birimi) gecer.
+    car_.setScale(static_cast<float>(kCarModelScale));
     car_.draw();
+}
+
+void Scene3D::drawDebugLine(double x0, double z0, double x1, double z1) {
+    // Zemin ustu ince cizgi (dunya birimi; x0/z0 izgara birliginde gelir).
+    gDrawLine(static_cast<float>(x0) * kCellWorld - centerx_,
+              kDebugY,
+              static_cast<float>(z0) * kCellWorld - centerz_,
+              static_cast<float>(x1) * kCellWorld - centerx_,
+              kDebugY,
+              static_cast<float>(z1) * kCellWorld - centerz_, 2.0f);
+}
+
+void Scene3D::drawVehicleBox(double centerX, double centerZ, double headingRad) {
+    // Ayni sag-ofseti uygulayip ayak-izi kutusunu ciz — 3B arac bunun ustunde.
+    double wx = 0.0, wz = 0.0;
+    applyLaneOffset(static_cast<double>(centerX), static_cast<double>(centerZ),
+                    headingRad, wx, wz);
+
+    double x0, z0, x1, z1, x2, z2, x3, z3;
+    carFootprint(wx, wz, headingRad, x0, z0, x1, z1, x2, z2, x3, z3);
+    const auto W = [&](double x) { return static_cast<float>(x) * kCellWorld; };
+    gDrawLine(W(x0) - centerx_, kDebugY, W(z0) - centerz_,
+              W(x1) - centerx_, kDebugY, W(z1) - centerz_, 2.0f);
+    gDrawLine(W(x1) - centerx_, kDebugY, W(z1) - centerz_,
+              W(x2) - centerx_, kDebugY, W(z2) - centerz_, 2.0f);
+    gDrawLine(W(x2) - centerx_, kDebugY, W(z2) - centerz_,
+              W(x3) - centerx_, kDebugY, W(z3) - centerz_, 2.0f);
+    gDrawLine(W(x3) - centerx_, kDebugY, W(z3) - centerz_,
+              W(x0) - centerx_, kDebugY, W(z0) - centerz_, 2.0f);
+}
+
+void Scene3D::drawDebugArrow(double centerX, double centerZ, double dirX, double dirZ) {
+    // Ok, aracin MERKEZinden gidis yonune dogru: seritteki bir sonraki noktaya
+    // dogru (yon birim vektor, normalize edilir). Ofset uygulanmis merkezden
+    // baslar — boylece 3B aracin burnu okun ustunden cikmali.
+    const double len = std::sqrt(dirX * dirX + dirZ * dirZ);
+    if (len < 1e-9) return;
+    const double ux = dirX / len;
+    const double uz = dirZ / len;
+
+    double cx = 0.0, cz = 0.0;
+    applyLaneOffset(centerX, centerZ, std::atan2(ux, uz), cx, cz);
+
+    const double tipX = cx + ux * 0.55;
+    const double tipZ = cz + uz * 0.55;
+    const auto W = [&](double x) { return static_cast<float>(x) * kCellWorld; };
+    // Govde.
+    gDrawLine(W(cx) - centerx_, kDebugY + 0.02f, W(cz) - centerz_,
+              W(tipX) - centerx_, kDebugY + 0.02f, W(tipZ) - centerz_, 3.0f);
+    // Uc kanatlari (govdeye 30 derece, 0.18 birim).
+    const double a = std::atan2(ux, uz) + 0.5235988;  // +30°
+    const double b = std::atan2(ux, uz) - 0.5235988;  // −30°
+    gDrawLine(W(tipX) - centerx_, kDebugY + 0.02f, W(tipZ) - centerz_,
+              W(tipX + std::sin(a) * 0.18) - centerx_, kDebugY + 0.02f,
+              W(tipZ + std::cos(a) * 0.18) - centerz_, 3.0f);
+    gDrawLine(W(tipX) - centerx_, kDebugY + 0.02f, W(tipZ) - centerz_,
+              W(tipX + std::sin(b) * 0.18) - centerx_, kDebugY + 0.02f,
+              W(tipZ + std::cos(b) * 0.18) - centerz_, 3.0f);
 }
 
 }  // namespace render

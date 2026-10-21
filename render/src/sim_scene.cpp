@@ -31,12 +31,29 @@ Grid buildRenderGrid() {
 SimScene::SimScene(std::uint64_t seed, int stepsPerSecond)
     : net_(buildNetwork(buildRenderGrid())),
       world_(net_, WorldConfig{}, seed),
-      driver_(world_, [](JunctionId) -> std::unique_ptr<IController> {
-          // Simdilik sabit zamanli kontrolcu. Q-learning sonraki adimda
-          // politika dosyasindan yuklenebilir.
-          return std::make_unique<FixedTimeController>();
-      }) {
+      driver_(world_, defaultFactory()),
+      seed_(seed) {
     setStepsPerSecond(stepsPerSecond);
+}
+
+SignalDriver::ControllerFactory SimScene::defaultFactory() {
+    // Simdilik sabit zamanli kontrolcu. Q-learning sonraki adimda
+    // politika dosyasindan yuklenebilir.
+    return [](JunctionId) -> std::unique_ptr<IController> {
+        return std::make_unique<FixedTimeController>();
+    };
+}
+
+void SimScene::reset() {
+    // Home tusu: ayni tohumla BASA don. Uye sirasi onemli — world_ eski
+    // net_'i, driver_ eski world_'u gostermemeli; taze nesneler kurulur.
+    // World/Network/SignalDriver'in hibirinde kullanici tanimli dtor/copy
+    // yok (olcum): yerinde atanabilirler. sim-core'a dokunulmaz.
+    net_ = buildNetwork(buildRenderGrid());
+    world_ = World(net_, WorldConfig{}, seed_);
+    driver_ = SignalDriver(world_, defaultFactory());
+    accumulator_ = 0.0;
+    paused_ = false;
 }
 
 void SimScene::setStepsPerSecond(int n) {
@@ -45,8 +62,8 @@ void SimScene::setStepsPerSecond(int n) {
 }
 
 void SimScene::advance(double dtSeconds) {
-    if (stopped() || stepsPerSecond_ <= 0) {
-        return;
+    if (stopped() || stepsPerSecond_ <= 0 || paused_) {
+        return;  // P tusuyla duraklatildiginda adim atilmaz (IG-2)
     }
     // GERCEK gecen sureyi "simulasyon-saniye" olarak biriktir.
     // 1 saniye gercek sure * stepsPerSecond_ = kac sim-sn adim.
@@ -72,26 +89,53 @@ void SimScene::stepOnce() {
 Vec2d SimScene::lanePointAt(LaneId laneId, double distMeters) const {
     const Lane& lane = net_.lane(laneId);
     const auto& cells = lane.cells;
-    if (cells.empty()) {
-        return Vec2d{0.0, 0.0};
+
+    // CIZIM YOLU: from-dugum -> cells -> to-dugum.
+    //
+    // ÖLÇÜM (2026-10-21, teşhis): sim-core'da `lane.cells` iki dugumun hucresini
+    // HARIC tutar ve `length = cells.size() * kCellLength` yalnizca bu ara
+    // hucreleri olcer. Sonuc:
+    //   - 0 hucreli serit (komsu dugumler): position=0, cells bos -> eski kod
+    //     (0,0) donduruyordu => arac IZGARA KOSESONDE (boslukta).
+    //   - 1 hucreli serit: lastIdx=0, her position -> hep cells[0] => arac
+    //     YERINDE SAYIYORDU (pos artiyor ama world sabit).
+    // Duzeltme: cizim yoluna dugum hucreleri de eklenir; position [0, length]
+    // bu TAM yol (cells.size()+1 segment) boyunca interpolasyonlanir. Boylece
+    // arac hic bosluga dusmez ve serit boyunca GERCEKTEN kayar.
+    const Vec2i fromCell = net_.node(lane.from).cell;
+    const Vec2i toCell = net_.node(lane.to).cell;
+    const std::size_t n = cells.size();
+
+    if (n == 0) {
+        // Komsu dugumler arasi bos serit: position hep 0 (length=0). Araci
+        // from hucresinde goster (bosluga DEGIL).
+        return Vec2d{static_cast<double>(fromCell.x) + 0.5,
+                     static_cast<double>(fromCell.y) + 0.5};
     }
-    // Her hucre kCellLength metre. distMeters'i hucre indeksine cevir ve
-    // iki hucre merkezi arasinda interpolasyon yap (arac konumu kayan nokta).
-    const double cellPos = distMeters / kCellLength;
-    const double lastIdx = static_cast<double>(cells.size() - 1);
-    const double clamped = std::clamp(cellPos, 0.0, lastIdx);
 
-    const int i0 = static_cast<int>(clamped);
-    const int i1 = std::min(i0 + 1, static_cast<int>(cells.size()) - 1);
-    const double frac = clamped - static_cast<double>(i0);
+    // position -> [0,1] -> tam yol boyunca (n+1 segment) interpolasyon.
+    const double length = lane.length;  // n * kCellLength
+    const double f = (length > 0.0) ? std::clamp(distMeters / length, 0.0, 1.0) : 0.0;
+    const double segPos = f * static_cast<double>(n + 1);
+    int seg = static_cast<int>(segPos);
+    if (seg > static_cast<int>(n)) {
+        seg = static_cast<int>(n);
+    }
+    const double frac = segPos - static_cast<double>(seg);
 
-    const Vec2i c0 = cells[static_cast<std::size_t>(i0)];
-    const Vec2i c1 = cells[static_cast<std::size_t>(i1)];
-    // Hucre MERKEZI: (x + 0.5, y + 0.5).
-    const double x = (static_cast<double>(c0.x) + 0.5) * (1.0 - frac) +
-                     (static_cast<double>(c1.x) + 0.5) * frac;
-    const double y = (static_cast<double>(c0.y) + 0.5) * (1.0 - frac) +
-                     (static_cast<double>(c1.y) + 0.5) * frac;
+    // Nokta listesi indeksleme: 0=from, 1..n=cells[0..n-1], n+1=to.
+    const auto pointAt = [&](int idx) -> Vec2i {
+        if (idx <= 0) return fromCell;
+        if (idx <= static_cast<int>(n)) return cells[static_cast<std::size_t>(idx - 1)];
+        return toCell;
+    };
+
+    const Vec2i p0 = pointAt(seg);
+    const Vec2i p1 = pointAt(seg + 1);
+    const double x = (static_cast<double>(p0.x) + 0.5) * (1.0 - frac) +
+                     (static_cast<double>(p1.x) + 0.5) * frac;
+    const double y = (static_cast<double>(p0.y) + 0.5) * (1.0 - frac) +
+                     (static_cast<double>(p1.y) + 0.5) * frac;
     return Vec2d{x, y};
 }
 
@@ -106,6 +150,57 @@ double SimScene::laneHeadingAt(LaneId laneId, double distMeters) const {
         return 0.0;  // hareketsiz
     }
     return std::atan2(dx, dy);
+}
+
+std::vector<Vec2d> SimScene::laneCenterPath(LaneId laneId) const {
+    const Lane& lane = net_.lane(laneId);
+    const Vec2i fromCell = net_.node(lane.from).cell;
+    const Vec2i toCell = net_.node(lane.to).cell;
+
+    auto push = [](std::vector<Vec2d>& out, const Vec2i& c) {
+        out.push_back(Vec2d{static_cast<double>(c.x) + 0.5,
+                            static_cast<double>(c.y) + 0.5});
+    };
+
+    std::vector<Vec2d> path;
+    push(path, fromCell);
+    for (const Vec2i& c : lane.cells) {
+        push(path, c);
+    }
+    push(path, toCell);
+    return path;
+}
+
+Vec2d SimScene::laneDirAt(LaneId laneId, double distMeters) const {
+    // GIDIS YON VEKTORU — kaynak laneCenterPath GEOMETRISI (konum türevi degil).
+    // Neden: 0 hucreli kolda (dikey kollar) konum türevi sifirdi; ayni iki nokta
+    // donuyordu. Geometri (from -> cells -> to) her seritte dogru yonu verir.
+    // Segment haritalamasi lanePointAt ile AYNI (position/[0,1] -> n+1 segment).
+    const std::vector<Vec2d> path = laneCenterPath(laneId);
+    const std::size_t nseg = (path.size() >= 2) ? path.size() - 1 : 0;
+    if (nseg == 0) return Vec2d{0.0, 0.0};
+
+    const Lane& lane = net_.lane(laneId);
+    const double length = lane.length;
+    const double f = (length > 0.0) ? std::clamp(distMeters / length, 0.0, 1.0) : 0.0;
+    std::size_t seg = static_cast<std::size_t>(f * static_cast<double>(nseg));
+    if (seg >= nseg) seg = nseg - 1;
+
+    const Vec2d& a = path[seg];
+    const Vec2d& b = path[seg + 1];
+    const double dx = b.x - a.x;
+    const double dz = b.y - a.y;
+    if (dx == 0.0 && dz == 0.0) {
+        // Cok kisa segment: ilk gecerli segmenti bul (geometri sifir olmaz,
+        // yan yana iki farkli hucre var; yine de guvenlik).
+        for (std::size_t i = 0; i < nseg; ++i) {
+            const double ex = path[i + 1].x - path[i].x;
+            const double ez = path[i + 1].y - path[i].y;
+            if (ex != 0.0 || ez != 0.0) return Vec2d{ex, ez};
+        }
+        return Vec2d{0.0, 0.0};
+    }
+    return Vec2d{dx, dz};
 }
 
 }  // namespace render

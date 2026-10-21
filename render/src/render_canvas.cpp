@@ -8,7 +8,12 @@
 
 #include "tsc/intersection.hpp"
 
+#include <GLFW/glfw3.h>   // GLFW_KEY_HOME (Home tusu; engine pkg-config ile erisir)
+
+#include <cmath>
 #include <iostream>
+#include <set>
+#include <utility>
 
 namespace tsc {
 namespace render {
@@ -30,7 +35,7 @@ float py(double cy) { return static_cast<float>(kOriginY) + static_cast<float>(c
 }  // namespace
 
 RenderCanvas::RenderCanvas(RenderApp* root)
-    : gBaseCanvas(root), scene(1, 1), scene3d(1280, 720) {
+    : gBaseCanvas(root), scene(1, 10), scene3d(1280, 720) {
     this->root = root;
 }
 
@@ -73,31 +78,157 @@ void RenderCanvas::draw() {
     drawVehicles();
 }
 
+void RenderCanvas::keyPressed(int key) {
+    // D: hata ayiklama katmanini ac/kapa.
+    if (key == 'd' || key == 'D') {
+        debuglayer = !debuglayer;
+        std::cout << "[render] hata ayiklama katmani: "
+                  << (debuglayer ? "ACIK" : "KAPALI") << std::endl;
+        return;
+    }
+    // P: duraklat / devam et (IG-2). Sim duraklarken draw calismaya devam
+    // eder (ekran donmaz), yalnizca simulasyon adimi atilmaz.
+    if (key == 'p' || key == 'P') {
+        scene.setPaused(!scene.paused());
+        std::cout << "[render] simulasyon: "
+                  << (scene.paused() ? "DURAKLADI (P)" : "DEVAM (P)")
+                  << "  sim-sn: " << scene.world().time() << std::endl;
+        return;
+    }
+    // HOME: simulasyonu ayni tohumla basa dondur — bitince araclari yeniden
+    // gormek ve yon dogrulamasini tekrarlamak icin.
+    if (key == GLFW_KEY_HOME) {
+        scene.reset();
+        std::cout << "[render] simulasyon YENIDEN BASLATILDI (Home)"
+                  << std::endl;
+        return;
+    }
+}
+
 void RenderCanvas::drawScene3D() {
     scene3d.begin();
     const Network& net = scene.network();
     const World& w = scene.world();
 
-    // Yollar + kavsonglar: her serit hucresi bir 3B karo.
+    // YOL KAROLARI: artik HER seridin TAM yolundan (from-dugum -> cells ->
+    // to-dugum) doseliyor — ayni kaynak debug mavi cizgisinin kaynagi. Boylece
+    // "mavi cizgi var, altinda karo yok" kalmasin (0 hucreli kollar dahil).
+    // Ayni hucreyi iki serit paylasir; tekrar dosememek icin set.
+    std::set<std::pair<int, int>> tiled;
     for (const LaneId lid : net.allLanes()) {
-        const Lane& lane = net.lane(lid);
-        for (const Vec2i& c : lane.cells) {
-            scene3d.drawRoadTile(c);
+        const std::vector<Vec2d> path = scene.laneCenterPath(lid);
+        for (const Vec2d& p : path) {
+            // laneCenterPath x+0.5 (hucre merkezi) dondurur; floor ile hucre indeksi.
+            const int cx = static_cast<int>(std::floor(p.x));
+            const int cy = static_cast<int>(std::floor(p.y));
+            if (tiled.insert({cx, cy}).second) {
+                scene3d.drawRoadTile(Vec2i{cx, cy});
+            }
         }
     }
+    // Kavsong karolari (kavsong hucresi): sinyalli dugumler.
     for (const JunctionId j : net.signalJunctions()) {
         scene3d.drawJunctionTile(net.node(j).cell);
     }
 
-    // Araclar: konum + yon.
+    // Araclar: konum + yon. YON artik serit GEOMETRISINDEN (laneDirAt);
+    // konum türevi 0 hucreli kolda sifir donuyordu.
     for (const Vehicle& v : w.vehicles()) {
         if (!v.valid()) continue;
         const Vec2d p = scene.lanePointAt(v.currentLane, v.position);
-        const double heading = scene.laneHeadingAt(v.currentLane, v.position);
+        const Vec2d dir = scene.laneDirAt(v.currentLane, v.position);
+        const double heading = (dir.x == 0.0 && dir.y == 0.0)
+                                   ? 0.0
+                                   : std::atan2(dir.x, dir.y);
         scene3d.drawCar(static_cast<float>(p.x), static_cast<float>(p.y), heading);
     }
 
+    // Hata ayiklama katmani (D tusu): serit merkez cizgileri + arac kutulari.
+    if (debuglayer) {
+        drawDebugLayer();
+    }
+
+    // YON OLCEMI (her karede calisir, D bagimsiz): omurgadaki (yatay) ve
+    // dikey koldaki bir arac yaw'i — aralarinda 90 derece fark OLMALI.
+    // Kaynak: laneDirAt (serit GEOMETRISI). Konum türevi 0 hucreli kolda
+    // sifirdi; o yuzden dikey araclar eleniyordu ve log hic basilmadi (0 satir).
+    // Duraklatildiginda (P) degerler degismez; ayni satiri tekrar basmamak icin
+    // sayaci donduruyoruz.
+    if (scene.paused()) {
+        yonlogcounter_ = 0;
+    } else if (++yonlogcounter_ >= 120) {
+        yonlogcounter_ = 0;
+        const Vehicle* yatay = nullptr;
+        const Vehicle* dikey = nullptr;
+        const auto dirOf = [&](const Vehicle& v, double& dirX, double& dirZ) {
+            const Vec2d d = scene.laneDirAt(v.currentLane, v.position);
+            dirX = d.x;
+            dirZ = d.y;
+        };
+        for (const Vehicle& v : w.vehicles()) {
+            if (!v.valid()) continue;
+            double dx = 0.0, dz = 0.0;
+            dirOf(v, dx, dz);
+            if (dx == 0.0 && dz == 0.0) continue;
+            if (std::abs(dz) < std::abs(dx) && !yatay) yatay = &v;
+            if (std::abs(dx) < std::abs(dz) && !dikey) dikey = &v;
+        }
+        if (yatay && dikey) {
+            double hx = 0.0, hz = 0.0, vx = 0.0, vz = 0.0;
+            dirOf(*yatay, hx, hz);
+            dirOf(*dikey, vx, vz);
+            const double omurgaDeg = carYawDeg(hx, hz);
+            const double kolDeg = carYawDeg(vx, vz);
+            double fark = std::abs(omurgaDeg - kolDeg);
+            if (fark > 180.0) fark = 360.0 - fark;
+            std::cout << "[yon] omurga yaw=" << omurgaDeg
+                      << "  kol yaw=" << kolDeg
+                      << "  |fark|=" << fark << " derece"
+                      << (std::abs(fark - 90.0) < 1.0 ? "  [OK 90]" : "  [!! 90 DEGIL]")
+                      << std::endl;
+        }
+    }
+
     scene3d.end();
+}
+
+void RenderCanvas::drawDebugLayer() {
+    const Network& net = scene.network();
+    const World& w = scene.world();
+
+    // 1) Serit merkez cizgileri (ofsetsiz, yolun kendisi) — ince renkli cizgi.
+    setColor(90, 200, 255);
+    for (const LaneId lid : net.allLanes()) {
+        const std::vector<Vec2d> path = scene.laneCenterPath(lid);
+        for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+            scene3d.drawDebugLine(path[i].x, path[i].y,
+                                  path[i + 1].x, path[i + 1].y);
+        }
+    }
+
+    // 2) Arac kutulari (sim konumunda, sag-ofset uygulanmis) — kirmizi.
+    setColor(255, 80, 80);
+    for (const Vehicle& v : w.vehicles()) {
+        if (!v.valid()) continue;
+        const Vec2d p = scene.lanePointAt(v.currentLane, v.position);
+        const Vec2d dir = scene.laneDirAt(v.currentLane, v.position);
+        const double heading = (dir.x == 0.0 && dir.y == 0.0)
+                                   ? 0.0
+                                   : std::atan2(dir.x, dir.y);
+        scene3d.drawVehicleBox(p.x, p.y, heading);
+    }
+
+    // 3) Gidis yonu oklari (YESIL): serit GEOMETRISI yonu (laneDirAt). Ayni
+    //    yon vektoru drawCar'da carYawDeg'e giriyor — ok ile modelin burnu
+    //    HIZALI olmali (ok = arac burnunun bakmasi gereken yon).
+    setColor(60, 255, 120);
+    for (const Vehicle& v : w.vehicles()) {
+        if (!v.valid()) continue;
+        const Vec2d p = scene.lanePointAt(v.currentLane, v.position);
+        const Vec2d dir = scene.laneDirAt(v.currentLane, v.position);
+        if (dir.x == 0.0 && dir.y == 0.0) continue;
+        scene3d.drawDebugArrow(p.x, p.y, dir.x, dir.y);
+    }
 }
 
 void RenderCanvas::drawRoads() {
