@@ -5,6 +5,8 @@
 
 #include "scene3d.h"
 
+#include "gRenderer.h"   // gEnableCulling / gCullFace / GL_BACK
+
 #include <cmath>
 
 namespace tsc {
@@ -19,7 +21,9 @@ constexpr float kCamDist = 34.0f;
 constexpr float kCellWorld = 1.0f;   // 1 izgara hucresi = 1 dunya birimi
 
 // Arac yonu: Kenney arabalari -Z'ye bakar; sim yon acisindan donmeye cevirir.
-constexpr float kCarYawOffsetDeg = 180.0f;
+// KULLANICI GOZLEMİ (2026-10-21): 180 ile araclar yola DIK duruyordu (90° hata).
+// 90° eklenerek 270 yapildi. Hala dik gorunurse 90 <-> 270 arasinda cevrilecek.
+constexpr float kCarYawOffsetDeg = 270.0f;
 }  // namespace
 
 Scene3D::Scene3D(int viewportWidth, int viewportHeight) {
@@ -49,17 +53,24 @@ void Scene3D::setupCameraAndLight(int /*w*/, int /*h*/) {
 
     light_ = gLight(gLight::LIGHTTYPE_DIRECTIONAL);
     light_.setPosition(6.0f, 14.0f, 8.0f);
-    light_.setAmbientColor(70, 70, 78);
-    light_.setDiffuseColor(190, 188, 180);
-    light_.setSpecularColor(40, 40, 40);
+    // KULLANICI GOZLEMİ (2026-10-21): govde asiri parlakti. Diffuse/specular
+    // dusuruldu, ambient biraz acildi ki golge/govde detayi gorunur olsun.
+    light_.setAmbientColor(95, 95, 100);
+    light_.setDiffuseColor(120, 118, 112);
+    light_.setSpecularColor(20, 20, 20);
 }
 
 void Scene3D::begin() {
     camera_.begin();
     light_.enable();
+    // KULLANICI GOZLEMİ (2026-10-21): tekerleklerin İCİ gorunuyordu — backface
+    // culling kapaliydi. Arkayuz yuzleri artik cizilmiyor.
+    gEnableCulling();
+    gCullFace(GL_BACK);
 }
 
 void Scene3D::end() {
+    gDisableCulling();
     light_.disable();
     camera_.end();
 }
