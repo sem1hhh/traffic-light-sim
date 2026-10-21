@@ -11,6 +11,7 @@
 
 #include "gBaseCanvas.h"
 #include "render_app.h"
+#include "scene3d.h"
 #include "sim_scene.h"
 
 namespace tsc {
@@ -26,13 +27,17 @@ public:
     void draw() override;
 
 private:
-    // Izgara hucre cizgisine piksel cevirici. Grid 9x7; hucresel olcekleme.
+    // 3B spike cizimi (Kenney modelleri + izometrik kamera). Basarisiz olursa
+    // false doner ve cizim2D'ye dusur.
+    void drawScene3D();
+    //2D yedek cizim (spike oncesi).
     void drawRoads();
     void drawJunctions();
     void drawVehicles();
 
     RenderApp* root;
     SimScene scene;
+    Scene3D scene3d;
 
     // FPS logu.
     int framecounter = 0;

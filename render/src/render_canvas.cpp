@@ -29,7 +29,8 @@ float px(double cx) { return static_cast<float>(kOriginX) + static_cast<float>(c
 float py(double cy) { return static_cast<float>(kOriginY) + static_cast<float>(cy * kCellPx); }
 }  // namespace
 
-RenderCanvas::RenderCanvas(RenderApp* root) : gBaseCanvas(root), scene(1, 1) {
+RenderCanvas::RenderCanvas(RenderApp* root)
+    : gBaseCanvas(root), scene(1, 1), scene3d(1280, 720) {
     this->root = root;
 }
 
@@ -40,6 +41,8 @@ void RenderCanvas::setup() {
     std::cout << "[render] canvas setup: " << getWidth() << "x" << getHeight()
               << "  izgara " << kGridCols << "x" << kGridRows
               << "  sim hizi: " << scene.stepsPerSecond() << " adim/sn" << std::endl;
+    std::cout << "[render] 3B modeller: " << (scene3d.modelsLoaded() ? "YUKLENDI" : "YOK")
+              << " (araba + yol)" << std::endl;
 }
 
 void RenderCanvas::update() {
@@ -60,9 +63,41 @@ void RenderCanvas::update() {
 
 void RenderCanvas::draw() {
     clearColor(18, 24, 22);
+    if (scene3d.modelsLoaded()) {
+        drawScene3D();
+        return;
+    }
+    //3B model yoksa2D yedek.
     drawRoads();
     drawJunctions();
     drawVehicles();
+}
+
+void RenderCanvas::drawScene3D() {
+    scene3d.begin();
+    const Network& net = scene.network();
+    const World& w = scene.world();
+
+    // Yollar + kavsonglar: her serit hucresi bir 3B karo.
+    for (const LaneId lid : net.allLanes()) {
+        const Lane& lane = net.lane(lid);
+        for (const Vec2i& c : lane.cells) {
+            scene3d.drawRoadTile(c);
+        }
+    }
+    for (const JunctionId j : net.signalJunctions()) {
+        scene3d.drawJunctionTile(net.node(j).cell);
+    }
+
+    // Araclar: konum + yon.
+    for (const Vehicle& v : w.vehicles()) {
+        if (!v.valid()) continue;
+        const Vec2d p = scene.lanePointAt(v.currentLane, v.position);
+        const double heading = scene.laneHeadingAt(v.currentLane, v.position);
+        scene3d.drawCar(static_cast<float>(p.x), static_cast<float>(p.y), heading);
+    }
+
+    scene3d.end();
 }
 
 void RenderCanvas::drawRoads() {

@@ -64,6 +64,7 @@ add_executable(tsc_render
     src/render_app.cpp
     src/render_canvas.cpp
     src/sim_scene.cpp
+    src/scene3d.cpp
 
     # sim-core ve controllers kaynaklari DOGRUDAN buraya derlenir (kutuphane
     # olarak add_subdirectory DEGIL). Sebep: sim-core/CMakeLists.txt test

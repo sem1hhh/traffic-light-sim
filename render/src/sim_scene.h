@@ -66,6 +66,11 @@ public:
     /// sinirlar (clamped).
     Vec2d lanePointAt(LaneId lane, double distMeters) const;
 
+    /// Bir seritte `distMeters` konumundaki YON acisi (radyan). Arac modelini
+    /// dogru yone cevirmek icin cizim tarafinda kullanilir. Sim-core'a dokunmaz;
+    /// yalnizca lanePointAt'i iki noktadan cagirip yonu hesaplar.
+    double laneHeadingAt(LaneId lane, double distMeters) const;
+
 private:
     void stepOnce();
 

@@ -7,6 +7,7 @@
 #include "sim_scene.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace tsc {
 namespace render {
@@ -92,6 +93,19 @@ Vec2d SimScene::lanePointAt(LaneId laneId, double distMeters) const {
     const double y = (static_cast<double>(c0.y) + 0.5) * (1.0 - frac) +
                      (static_cast<double>(c1.y) + 0.5) * frac;
     return Vec2d{x, y};
+}
+
+double SimScene::laneHeadingAt(LaneId laneId, double distMeters) const {
+    // Iki adim arastaki farktan yon acisini hesapla (sadece cizim icin).
+    const double eps = 0.5;  // 0.5 metre ileri
+    const Vec2d a = lanePointAt(laneId, distMeters);
+    const Vec2d b = lanePointAt(laneId, distMeters + eps);
+    const double dx = b.x - a.x;
+    const double dy = b.y - a.y;
+    if (dx == 0.0 && dy == 0.0) {
+        return 0.0;  // hareketsiz
+    }
+    return std::atan2(dx, dy);
 }
 
 }  // namespace render
