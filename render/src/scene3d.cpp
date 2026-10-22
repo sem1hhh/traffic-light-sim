@@ -8,6 +8,7 @@
 #include "gRenderer.h"   // gEnableCulling / gCullFace / GL_BACK
 
 #include <cmath>
+#include <algorithm>
 
 namespace tsc {
 namespace render {
@@ -48,10 +49,7 @@ void Scene3D::setupCameraAndLight(int /*w*/, int /*h*/) {
     camera_.setFov(kFovDeg);
     camera_.setNearClip(0.1f);
     camera_.setFarClip(200.0f);
-    // Izometrik aci: 45 derece yan, ~30 derece yuksekten.
-    const float d = kCamDist;
-    camera_.setPosition(d * 0.7f, d * 0.62f, d * 0.7f);
-    camera_.lookAt(glm::vec3(0.0f, 0.0f, 0.0f));
+    applyCamera();
 
     light_ = gLight(gLight::LIGHTTYPE_DIRECTIONAL);
     light_.setPosition(6.0f, 14.0f, 8.0f);
@@ -60,6 +58,43 @@ void Scene3D::setupCameraAndLight(int /*w*/, int /*h*/) {
     light_.setAmbientColor(95, 95, 100);
     light_.setDiffuseColor(120, 118, 112);
     light_.setSpecularColor(20, 20, 20);
+}
+
+void Scene3D::applyCamera() {
+    // Izometrik aci: 45 derece yan, ~30 derece yuksekten. Zoom, bu yon
+    // vektorunu KORUYARAK mesafeyi degistirir; boylece aci sabit kalir.
+    const float d = kCamDist / zoom_;
+    camera_.setPosition(panx_ + d * 0.7f, d * 0.62f, panz_ + d * 0.7f);
+    camera_.lookAt(glm::vec3(panx_, 0.0f, panz_));
+}
+
+void Scene3D::setZoom(float zoom) {
+    // 0.35 = cok uzak (tum ag), 3.0 = cok yakin. Sinirlar keyfi degil:
+    // 0.35'te ag tamamen sigiyor, 3.0'da araba modeli ekrani dolduruyor.
+    constexpr float kZoomMin = 0.35f;
+    constexpr float kZoomMax = 3.0f;
+    zoom_ = std::clamp(zoom, kZoomMin, kZoomMax);
+    applyCamera();
+}
+
+void Scene3D::zoomBy(float factor) {
+    setZoom(zoom_ * factor);
+}
+
+void Scene3D::panBy(float dxCells, float dzCells) {
+    // Pan sinirlari: agin disina cikip "bos ekran" gorulmesin. 9x7 ag icin
+    // +-12 hucre rahat bir aralik; klavye tekrarinda asla kaybolmaz.
+    constexpr float kPanLimit = 12.0f;
+    panx_ = std::clamp(panx_ + dxCells, -kPanLimit, kPanLimit);
+    panz_ = std::clamp(panz_ + dzCells, -kPanLimit, kPanLimit);
+    applyCamera();
+}
+
+void Scene3D::resetView() {
+    zoom_ = 1.0f;
+    panx_ = 0.0f;
+    panz_ = 0.0f;
+    applyCamera();
 }
 
 void Scene3D::begin() {

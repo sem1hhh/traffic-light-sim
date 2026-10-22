@@ -46,6 +46,16 @@ public:
 
     bool modelsLoaded() const noexcept { return carloaded_ && roadloaded_; }
 
+    // --- KAMERA KONTROLU (Faz 7) --------------------------------------------
+    // Zoom, kamera MESAFESI ile yapilir (FOV sabit kalir): dar FOV'lu
+    // izometrik taklit bozulmaz. Pan, hem kamerayi hem bakis noktasini ayni
+    // miktarda kaydirir — boylece bakis acisi degismez.
+    void setZoom(float zoom);          ///< 1.0 = varsayilan; [kZoomMin, kZoomMax]
+    void zoomBy(float factor);         ///< carpan (tekerlek/adim)
+    void panBy(float dxCells, float dzCells);
+    void resetView();                  ///< R tusu: zoom 1, pan 0
+    float zoom() const noexcept { return zoom_; }
+
     // --- Cizim fonksiyonlari (her biri tek is yapar) -------------------------
     /// Bir yol hucresini (izgara cell) 3B zemin karosu olarak ciz.
     /// `alongZ` true ise karo Y ekseninde 90° dondurulur: Kenney karosunun
@@ -70,6 +80,8 @@ public:
 
 private:
     void setupCameraAndLight(int w, int h);
+    /// Pan/zoom durumundan kameranin konumunu ve bakis noktasini kurar.
+    void applyCamera();
 
     gCamera camera_;
     gLight light_;
@@ -81,6 +93,11 @@ private:
     // Izgara -> dunya merkez kaymasi (izgarayi ekranda ortala).
     float centerx_ = 0.0f;
     float centerz_ = 0.0f;
+
+    // Kamera durumu (R tusu varsayilana dondurur).
+    float zoom_ = 1.0f;
+    float panx_ = 0.0f;
+    float panz_ = 0.0f;
 };
 
 }  // namespace render

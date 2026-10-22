@@ -17,9 +17,12 @@
 #include "tsc/world.hpp"
 #include "controller.hpp"       // SignalDriver
 #include "fixed_time.hpp"       // FixedTimeController
+#include "q_learning.hpp"       // QLearningController (politika dosyasindan)
 
 #include <cstdint>
 #include <map>
+#include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -54,6 +57,23 @@ enum class RoadAxis : std::uint8_t {
 //   ve kural gereği experiments/ dosyalarina DOKUNULMAZ. Cizim/demo
 /// iskeletidir; asil izgara editoru (IG-1) bunun yerini alacak.
 Grid buildRenderGrid();
+
+/// Render katmaninda secilebilen kontrolcu (C tusu).
+///
+/// ONEMLI: bu tip yalnizca HANGI kontrolucunun kurulacagini secer. Karar
+/// mantigi controllers/ altindadir; burada yeniden yazilmaz.
+enum class ControllerKind : std::uint8_t {
+    FixedTime = 0,     ///< Webster ayarli sabit zamanli
+    ThresholdRule = 1, ///< kural tabanli (esik)
+    QLearning = 2      ///< models/ altindaki egitilmis politika
+};
+
+/// HUD/log icin Turkce ad.
+const char* controllerDisplayName(ControllerKind k) noexcept;
+
+/// Q politikasi dosyasi icin varsayilan aday yollar (cwd'ye gore).
+/// Uygulama `render/` icinden calistirilir; ilk aday ../models/.
+const char* qPolicyPathCandidate(int index) noexcept;
 
 class SimScene {
 public:
@@ -95,6 +115,25 @@ public:
     DemandProfile demandProfile() const noexcept { return config_.profile; }
     /// Ekranda gosterilecek saat (IG-3). World'dan okunur, TURETILMEZ.
     double hourOfDay() const noexcept { return world_.hourOfDay(); }
+
+    // --- Kontrolcu secimi (C tusu) -----------------------------------------
+    ControllerKind controllerKind() const noexcept { return kind_; }
+    const char* controllerName() const noexcept { return controllerDisplayName(kind_); }
+    /// Kontrolcuyu degistirir ve AYNI tohumla bastan baslatir (kullanici
+    /// istegi: "her degisimde ayni tohumla"). Ayni tohum + ayni senaryo
+    /// oldugu icin uc kosu ESLESTIRILMIS olur (IG-7 paneli bunu kullanir).
+    void setController(ControllerKind kind);
+    void cycleController();
+    /// Q politika dosyasini yukler. Basarisizsa false doner (cokme YOK).
+    bool loadQPolicy(const std::string& path);
+    /// Egitim sonucu politikayi devralir (IG-6 Train tusu).
+    void adoptQPolicy(QLearningController policy);
+    bool qPolicyLoaded() const noexcept { return qpolicy_ != nullptr; }
+    /// Eval/train icin salt-okunur politika kopyasi (yoksa nullptr).
+    const QLearningController* qPolicy() const noexcept { return qpolicy_.get(); }
+    /// Live senaryo yapilandirmasi (ayni tohumla kiyaslama kosulari icin).
+    const WorldConfig& worldConfig() const noexcept { return config_; }
+    std::uint64_t seed() const noexcept { return seed_; }
 
     /// Bir izgara hucresinin karo ekseni. Hucreye dokunan serit
     /// segmentlerinden turetilmistir (kurulumda bir kez).
@@ -139,8 +178,9 @@ public:
 private:
     void stepOnce();
 
-    /// Fabrika (kurucu ve reset() aynisini kullanir): sabit zamanli kontrolcu.
-    static SignalDriver::ControllerFactory defaultFactory();
+    /// Aktif kontrolcu icin fabrika. `reset()` her cagrildiginda yeniden
+    /// kurulur; Q-learning icin politikadan kavsak basina KOPYA uretir.
+    SignalDriver::ControllerFactory makeFactory() const;
 
     /// Karo eksenlerini serit geometrisinden turetir (kurulumda bir kez).
     void buildRoadAxes();
@@ -150,6 +190,11 @@ private:
     World world_;               ///< config_'e bagli: once config_ kurulur
     SignalDriver driver_;
     std::map<std::pair<int, int>, RoadAxis> roadAxes_;  ///< hucre -> karo ekseni
+
+    ControllerKind kind_ = ControllerKind::FixedTime;
+    /// Egitilmis Q tablosu (yuklenmis ya da egitimden gelmis). nullptr ise
+    /// Q-learning secildiginde bos tablo kullanilir (log'da uyarilir).
+    std::unique_ptr<QLearningController> qpolicy_;
 
     std::uint64_t seed_ = 0;    ///< reset() ayni tohumla yeniden kurar (Home)
     bool paused_ = false;       ///< P tusu: advance() adim atmaz

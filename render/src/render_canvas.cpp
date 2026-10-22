@@ -8,7 +8,7 @@
 
 #include "tsc/intersection.hpp"
 
-#include <GLFW/glfw3.h>   // GLFW_KEY_HOME (Home tusu; engine pkg-config ile erisir)
+#include <GLFW/glfw3.h>   // GLFW_KEY_HOME / scroll callback (motor pkg-config ile erisir)
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +20,33 @@
 
 namespace tsc {
 namespace render {
+
+namespace {
+// --- Trackpad/fare tekerlegi koprusu ---------------------------------------
+// SORUN (olculdu): motorun gGLFWWindow scroll callback'i `static_cast<int>`
+// yapiyor; macOS trackpad'i surekli ve KESIRLI yoffset uretir (orn. 0.12),
+// yani butun olaylar 0'a yuvarlanip canvas'a hicbir zoom ulasmiyordu.
+// COZUM: GLFW callback'ini dogrudan kurup `double` degeri kullaniyoruz;
+// motorun onceki callback'i de cagrilir (GUI yolu bozulmasin).
+RenderCanvas* g_scrollcanvas = nullptr;
+GLFWscrollfun g_prevscroll = nullptr;
+
+void scrollThunk(GLFWwindow* window, double xoffset, double yoffset) {
+    if (g_prevscroll != nullptr) {
+        g_prevscroll(window, xoffset, yoffset);
+    }
+    if (g_scrollcanvas != nullptr) {
+        g_scrollcanvas->onScrollDelta(yoffset);
+    }
+}
+
+// Zoom adimi: tekerlek tek "tik"i ~%10; trackpad kesirli oldugu icin
+// pow() ile yumusak olceklenir.
+constexpr double kZoomPerScroll = 1.10;
+constexpr float kKeyZoomFactor = 1.12f;
+// Kaydirma adimi (hucre). Ok tusu basina.
+constexpr float kPanStep = 0.8f;
+}  // namespace
 
 void OffsetStats::add(double latM, double tileM) {
     if (samples == 0) {
@@ -58,14 +85,21 @@ RenderCanvas::RenderCanvas(RenderApp* root)
 }
 
 RenderCanvas::~RenderCanvas() {
+    // Scroll koprusu bu canvas'i isaret ediyorsa temizle (dangling pointer).
+    if (g_scrollcanvas == this) {
+        g_scrollcanvas = nullptr;
+    }
 }
 
 void RenderCanvas::setup() {
     std::cout << "[render] canvas setup: " << getWidth() << "x" << getHeight()
               << "  izgara " << kGridCols << "x" << kGridRows
-              << "  sim hizi: " << scene.stepsPerSecond() << " adim/sn" << std::endl;
+              << "  sim hizi: " << scene.stepsPerSecond() << " adim/sn"
+              << "  senaryo: " << scene.worldConfig().vehicleCount << " arac / "
+              << scene.worldConfig().spawnInterval << " s aralik" << std::endl;
     std::cout << "[render] 3B modeller: " << (scene3d.modelsLoaded() ? "YUKLENDI" : "YOK")
               << " (araba + yol)" << std::endl;
+    std::cout << "[render] kontrolcu: " << scene.controllerName() << std::endl;
 
     // HUD (IG-3): metin cizimi icin alfa karisimi gerekir. Fontlar
     // assets/fonts/ altindan yuklenir (motor ayni yolu GUI icin de kullanir).
@@ -78,21 +112,23 @@ void RenderCanvas::setup() {
 
     // Karo eksenleri ve ofset olcumu hakkinda baslangic kaydi (kanit).
     std::cout << "[render] karo ekseni: dikey kollar 90 derece dondurulur" << std::endl;
+
+    // Trackpad/fare tekerlegi: motorun int'e kirpan yolu yerine dogrudan
+    // GLFW callback'i (kesirli yoffset korunur). Onceki callback saklanip
+    // yine cagrilir; motorun kendi GUI yolu bozulmaz.
+    if (GLFWwindow* window = glfwGetCurrentContext()) {
+        g_scrollcanvas = this;
+        g_prevscroll = glfwSetScrollCallback(window, &scrollThunk);
+        std::cout << "[render] scroll koprusu kuruldu (trackpad zoom)" << std::endl;
+    } else {
+        std::cout << "[render] UYARI: GLFW penceresi yok; trackpad zoom kapali"
+                  << std::endl;
+    }
 }
 
 void RenderCanvas::update() {
     // Simulasyonu kare hizindan BAGIMSIZ ilerlet: gecen gercek sureyi ver.
     scene.advance(static_cast<double>(root->getElapsedTime()));
-
-    // Ofset olcumu (~2 sn'de bir): araclarin serit merkezine ve cizilen KARO
-    // eksenine dik uzakligi. Duraklatildiginda sayac dondurulur (ayni satiri
-    // tekrar basmamak icin) — P tusu olcumu degistirmez.
-    if (scene.paused()) {
-        offcounter_ = 0;
-    } else if (++offcounter_ >= 120) {
-        offcounter_ = 0;
-        measureLaneOffset();
-    }
 
     // FPS logu (trafik akarken olculur).
     fpssum += static_cast<double>(root->getFramerate());
@@ -162,11 +198,44 @@ void RenderCanvas::keyPressed(int key) {
                   << "  sim-sn: " << scene.world().time() << std::endl;
         return;
     }
-    // M: ofset olcumunu hemen bas (beklemeden).
+    // M: ofset olcumunu hemen bas (beklemeden). Periyodik log YOK; olcum
+    // yalnizca bu tusla uretilir (kullanici istegi).
     if (key == 'm' || key == 'M') {
         measureLaneOffset();
         return;
     }
+    // C: kontrolcuyu degistir (sabit -> kural -> Q-learning) ve AYNI tohumla
+    // bastan baslat. Boylece uc kosu eslestirilmis olur (IG-7 paneli).
+    if (key == 'c' || key == 'C') {
+        scene.cycleController();
+        offhorizontal_ = OffsetStats{};
+        offvertical_ = OffsetStats{};
+        return;
+    }
+    // KAMERA: +/- zoom, oklar kaydir, R gorunumu sifirla.
+    if (key == GLFW_KEY_EQUAL || key == GLFW_KEY_KP_ADD) {
+        scene3d.zoomBy(kKeyZoomFactor);
+        std::cout << "[render] zoom: " << scene3d.zoom() << "x" << std::endl;
+        return;
+    }
+    if (key == GLFW_KEY_MINUS || key == GLFW_KEY_KP_SUBTRACT) {
+        scene3d.zoomBy(1.0f / kKeyZoomFactor);
+        std::cout << "[render] zoom: " << scene3d.zoom() << "x" << std::endl;
+        return;
+    }
+    if (key == 'r' || key == 'R') {
+        scene3d.resetView();
+        std::cout << "[render] gorunum sifirlandi (zoom 1x, pan 0)" << std::endl;
+        return;
+    }
+    // Oklar: ekran duzleminde kaydirma. Izometrik kamerada ekran sag/sol
+    // ekseni dunya (x,-z), ekran yukari ekseni dunya (-x,-z) yonundedir;
+    // bu yuzden pan her iki eksende bilesen alir.
+    const float s = kPanStep;
+    if (key == GLFW_KEY_LEFT)  { scene3d.panBy(-s,  s); return; }
+    if (key == GLFW_KEY_RIGHT) { scene3d.panBy( s, -s); return; }
+    if (key == GLFW_KEY_UP)    { scene3d.panBy(-s, -s); return; }
+    if (key == GLFW_KEY_DOWN)  { scene3d.panBy( s,  s); return; }
     // HOME: simulasyonu ayni tohumla basa dondur — bitince araclari yeniden
     // gormek ve yon dogrulamasini tekrarlamak icin.
     if (key == GLFW_KEY_HOME) {
@@ -177,6 +246,13 @@ void RenderCanvas::keyPressed(int key) {
                   << std::endl;
         return;
     }
+}
+
+void RenderCanvas::onScrollDelta(double dy) {
+    if (dy == 0.0) return;
+    // pow: kesirli trackpad degerlerini yumusak olcege cevirir. Tekerlek
+    // tek "tik"i (|dy|=1) ~%10 zoom demektir.
+    scene3d.zoomBy(static_cast<float>(std::pow(kZoomPerScroll, dy)));
 }
 
 void RenderCanvas::drawScene3D() {
@@ -328,26 +404,29 @@ void RenderCanvas::drawHud() {
                   scene.stepsPerSecond(),
                   scene.paused() ? "   DURAKLATILDI" : "");
 
-    char satir2[192];
+    char satir2[224];
     std::snprintf(satir2, sizeof satir2,
-                  "arac %d/%d   varan %d   tikanma %d/%d   sim-sn %.0f   FPS %d",
-                  active, w.config().vehicleCount, m.arrived, m.stalledNow,
-                  m.maxStalled, w.time(), root->getFramerate());
+                  "kontrolcu: %s   arac %d/%d   varan %d   tikanma %d/%d   sim-sn %.0f   FPS %d",
+                  scene.controllerName(), active, w.config().vehicleCount,
+                  m.arrived, m.stalledNow, m.maxStalled, w.time(),
+                  root->getFramerate());
 
-    char durum[192];
+    char durum[224];
     if (w.finished()) {
         std::snprintf(durum, sizeof durum, "SIM BITTI (tum araclar hedefe ulasti)");
     } else if (w.timedOut()) {
         std::snprintf(durum, sizeof durum, "SIM BITTI (zaman asimi)");
     } else {
         std::snprintf(durum, sizeof durum,
-                      "[1-8] hiz  [P] duraklat  [T] profil  [D] debug  [M] olcum  [Home] bastan");
+                      "[1-8] hiz  [P] duraklat  [T] profil  [C] kontrolcu  [Home] bastan");
     }
+    const char* ipucu =
+        "[+/-] tekerlek: zoom   [oklar] kaydir   [R] gorunum   [D] debug   [M] olcum";
 
     // Panel (alfa karisimli) + metinler. Renk renderer'a setColor ile verilir;
     // gFont::drawText bu rengi kullanir.
     setColor(8, 12, 10, 170);
-    gDrawRectangle(14.0f, 14.0f, 640.0f, 104.0f, true);
+    gDrawRectangle(14.0f, 14.0f, 760.0f, 132.0f, true);
 
     setColor(235, 245, 235);
     hudfont_.drawText(satir1, 26.0f, 24.0f);
@@ -355,6 +434,8 @@ void RenderCanvas::drawHud() {
     hudfontsmall_.drawText(satir2, 26.0f, 54.0f);
     setColor(140, 160, 150);
     hudfontsmall_.drawText(durum, 26.0f, 78.0f);
+    setColor(120, 140, 130);
+    hudfontsmall_.drawText(ipucu, 26.0f, 104.0f);
 }
 
 void RenderCanvas::drawDebugLayer() {

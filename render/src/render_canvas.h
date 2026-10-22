@@ -39,6 +39,12 @@ public:
     void draw() override;
     void keyPressed(int key) override;
 
+    /// GLFW kaydirma (trackpad iki parmak / fare tekerlegi) koprusu.
+    /// Motor bu olayi `int`e kirptigi icin trackpad'in kesirli degerleri
+    /// KAYBOLUYORDU (0'a yuvarlanip zoom hic tetiklenmiyordu). Bu yuzden
+    /// GLFW callback'i dogrudan `double` alir (bkz. .cpp scrollThunk).
+    void onScrollDelta(double dy);
+
 private:
     // 3B spike cizimi (Kenney modelleri + izometrik kamera). Basarisiz olursa
     // false doner ve cizim2D'ye dusur.
@@ -71,8 +77,8 @@ private:
     bool debuglayer = false;
     // Yon logu sayaci (debug katmaninda ~2 sn'de bir omurga/kol acisi basar).
     int yonlogcounter_ = 0;
-    // Ofset olcumu sayaci + birikimli istatistikler (yatay / dikey).
-    int offcounter_ = 0;
+    // Ofset olcumu birikimli istatistikleri (yatay / dikey). Yalnizca M
+    // tusuyla basilir — periyodik log YOK (kullanici istegi).
     OffsetStats offhorizontal_;
     OffsetStats offvertical_;
 

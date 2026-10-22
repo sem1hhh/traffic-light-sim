@@ -7,12 +7,66 @@
 #include "sim_scene.h"
 
 #include "coords.h"   // applyLaneOffset / kCellToMeters (olcumde cizimle AYNI)
+#include "threshold.hpp"  // ThresholdRuleController (C tusu)
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <string>
 
 namespace tsc {
 namespace render {
+
+namespace {
+
+/// Sahne senaryosu — experiments bench'in **medium** rejimiyle AYNI.
+///
+/// Neden medium: `models/q-medium.txt` bu talep dagiliminda egitildi.
+/// Senaryo ile egitim kosulu ayni olmazsa Q-learning "egitildigi isi"
+/// yapmaz (dagilim disi) ve kiyaslama adil olmaz.
+///
+/// DIKKAT: WorldConfig varsayilani `maxGreen = 60`; bench senaryosu ise
+/// 20 kullanir. Bu fark sessizce davranisi degistirirdi — burada acikca
+/// senaryo degerleri yaziliyor.
+WorldConfig renderScenarioConfig() {
+    WorldConfig c;
+    c.vehicleCount = 80;
+    c.spawnInterval = 3.5;
+    c.signal.minGreen = 5.0;
+    c.signal.maxGreen = 20.0;
+    c.signal.yellow = 3.0;
+    c.signal.allRed = 1.0;
+    return c;
+}
+
+SignalDriver::ControllerFactory fixedFactory() {
+    return [](JunctionId) -> std::unique_ptr<IController> {
+        return std::make_unique<FixedTimeController>();
+    };
+}
+
+}  // namespace
+
+const char* controllerDisplayName(ControllerKind k) noexcept {
+    switch (k) {
+        case ControllerKind::FixedTime:     return "sabit zamanli";
+        case ControllerKind::ThresholdRule: return "kural (esik)";
+        case ControllerKind::QLearning:     return "Q-learning";
+    }
+    return "?";
+}
+
+const char* qPolicyPathCandidate(int index) noexcept {
+    // Uygulama render/ icinden calisir (assets/ de orada). Model depo
+    // kokundedir; iki yol da denenir ki farkli cwd'lerde de bulunsun.
+    switch (index) {
+        case 0: return "../models/q-medium.txt";
+        case 1: return "models/q-medium.txt";
+        default: return nullptr;
+    }
+}
 
 Grid buildRenderGrid() {
     // experiments/bench.cpp buildScenarioGrid ile AYNI. 9x7 ızgara, ortada
@@ -32,19 +86,102 @@ Grid buildRenderGrid() {
 
 SimScene::SimScene(std::uint64_t seed, int stepsPerSecond)
     : net_(buildNetwork(buildRenderGrid())),
+      config_(renderScenarioConfig()),
       world_(net_, config_, seed),
-      driver_(world_, defaultFactory()),
+      driver_(world_, fixedFactory()),
       seed_(seed) {
     buildRoadAxes();
     setStepsPerSecond(stepsPerSecond);
+
+    // Egitilmis politikayi simdiden yukle: C tusuyla Q-learning'e gecis
+    // aninda dosya okuma gecikmesi olmasin. Basarisizsa uyari basilir,
+    // uygulama calismaya devam eder (Q secilirse sabit zamanliya duser).
+    for (int i = 0; qPolicyPathCandidate(i) != nullptr; ++i) {
+        if (loadQPolicy(qPolicyPathCandidate(i))) break;
+    }
 }
 
-SignalDriver::ControllerFactory SimScene::defaultFactory() {
-    // Simdilik sabit zamanli kontrolcu. Q-learning sonraki adimda
-    // politika dosyasindan yuklenebilir.
-    return [](JunctionId) -> std::unique_ptr<IController> {
-        return std::make_unique<FixedTimeController>();
-    };
+SignalDriver::ControllerFactory SimScene::makeFactory() const {
+    switch (kind_) {
+        case ControllerKind::FixedTime:
+            return fixedFactory();
+        case ControllerKind::ThresholdRule:
+            return [](JunctionId) -> std::unique_ptr<IController> {
+                return std::make_unique<ThresholdRuleController>();
+            };
+        case ControllerKind::QLearning: {
+            // Politika SALT-OKUNUR: her kavsak kendi KOPYASINI alir. Boylece
+            // (s,a,r,s') zinciri kavsaklar arasi tasinmaz (controller.hpp
+            // sozlesmesi). Epsilon 0: gosterilen sey OGRENILMIS politikadir,
+            // kesifli politika degil.
+            const QLearningController* p = qpolicy_.get();
+            return [p](JunctionId) -> std::unique_ptr<IController> {
+                if (p == nullptr) {
+                    return std::make_unique<FixedTimeController>();
+                }
+                QLearningController c = p->copy();
+                c.setEpsilon(0.0);
+                return std::make_unique<QLearningController>(std::move(c));
+            };
+        }
+    }
+    return fixedFactory();
+}
+
+bool SimScene::loadQPolicy(const std::string& path) {
+    std::ifstream f{path};
+    if (!f) return false;
+    auto p = std::make_unique<QLearningController>();
+    try {
+        p->deserialize(f);
+    } catch (const std::exception& e) {
+        std::cout << "[sim] Q politikasi okunamadi (" << path << "): " << e.what()
+                  << std::endl;
+        return false;
+    }
+    p->setEpsilon(0.0);  // degerlendirme/gosterim: kesif YOK
+    std::cout << "[sim] Q politikasi yuklendi: " << path
+              << "  (ziyaret edilen durum " << p->visitedStates() << "/"
+              << p->tableSize() << ", bilinen " << p->knownStates() << ")"
+              << std::endl;
+    qpolicy_ = std::move(p);
+    return true;
+}
+
+void SimScene::adoptQPolicy(QLearningController policy) {
+    policy.setEpsilon(0.0);
+    std::cout << "[sim] egitilmis politika devralindi: ziyaret "
+              << policy.visitedStates() << "/" << policy.tableSize()
+              << ", bilinen " << policy.knownStates() << std::endl;
+    qpolicy_ = std::make_unique<QLearningController>(std::move(policy));
+    if (kind_ == ControllerKind::QLearning) {
+        // Ayni tohumla bastan: yeni politika hemen gorunsun.
+        reset();
+    }
+}
+
+void SimScene::setController(ControllerKind kind) {
+    ControllerKind k = kind;
+    if (k == ControllerKind::QLearning && qpolicy_ == nullptr) {
+        std::cout << "[sim] UYARI: Q tablosu yuklu degil; sabit zamanliya "
+                     "donuldu (models/q-medium.txt bulunamadi?)"
+                  << std::endl;
+        k = ControllerKind::FixedTime;
+    }
+    kind_ = k;
+    reset();  // AYNI tohumla bastan (kullanici istegi)
+    std::cout << "[sim] kontrolcu: " << controllerName()
+              << "  (ayni tohum " << seed_ << " ile bastan)" << std::endl;
+}
+
+void SimScene::cycleController() {
+    ControllerKind next = ControllerKind::FixedTime;
+    switch (kind_) {
+        case ControllerKind::FixedTime:     next = ControllerKind::ThresholdRule; break;
+        case ControllerKind::ThresholdRule: next = ControllerKind::QLearning; break;
+        case ControllerKind::QLearning:     next = ControllerKind::FixedTime; break;
+    }
+    setController(next);
 }
 
 void SimScene::reset() {
@@ -54,7 +191,7 @@ void SimScene::reset() {
     // yok (olcum): yerinde atanabilirler. sim-core'a dokunulmaz.
     net_ = buildNetwork(buildRenderGrid());
     world_ = World(net_, config_, seed_);
-    driver_ = SignalDriver(world_, defaultFactory());
+    driver_ = SignalDriver(world_, makeFactory());
     accumulator_ = 0.0;
     paused_ = false;
     buildRoadAxes();
