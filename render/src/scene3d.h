@@ -48,7 +48,9 @@ public:
 
     // --- Cizim fonksiyonlari (her biri tek is yapar) -------------------------
     /// Bir yol hucresini (izgara cell) 3B zemin karosu olarak ciz.
-    void drawRoadTile(const Vec2i& cell);
+    /// `alongZ` true ise karo Y ekseninde 90° dondurulur: Kenney karosunun
+    /// yol ekseni X'tir; dikey kollarda yol Z boyunca gitmelidir.
+    void drawRoadTile(const Vec2i& cell, bool alongZ = false);
     /// Bir kavsongu (cell) 3B karo olarak ciz (spike: yol karosu ile ayni).
     void drawJunctionTile(const Vec2i& cell);
     /// Bir arac konumunu (izgara biriminde kayan-nokta) donmus olarak ciz.

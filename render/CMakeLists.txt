@@ -59,18 +59,9 @@ endif()
 add_subdirectory(${GLIST_ENGINE_DIR}/engine ./_build_engine)
 
 # --- Uygulamamiz -------------------------------------------------------------
-add_executable(tsc_render
-    src/main.cpp
-    src/render_app.cpp
-    src/render_canvas.cpp
-    src/sim_scene.cpp
-    src/scene3d.cpp
-
-    # sim-core ve controllers kaynaklari DOGRUDAN buraya derlenir (kutuphane
-    # olarak add_subdirectory DEGIL). Sebep: sim-core/CMakeLists.txt test
-    # hedeflerini (doctest/third_party) de cagiriyor; render ayri bir proje ve
-    # motor + simulasyonu tek basina derleyebilmeli. Ayrica kural: o dizinlere
-    # DOKUNULMAZ. Kaynak dosyalar oldugu gibi okunur, hicbiri degistirilmez.
+# Sim-core + controllers kaynaklari iki hedefte de kullanilir (uygulama ve
+# GUI'siz olcum araci). Tek listede tutulur ki ikisi AYNI cekirdegi derlesin.
+set(TSC_SIM_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/rng.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/src/grid.cpp
@@ -85,8 +76,38 @@ add_executable(tsc_render
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/q_learning.cpp
 )
 
+add_executable(tsc_render
+    src/main.cpp
+    src/render_app.cpp
+    src/render_canvas.cpp
+    src/sim_scene.cpp
+    src/scene3d.cpp
+
+    # sim-core ve controllers kaynaklari DOGRUDAN buraya derlenir (kutuphane
+    # olarak add_subdirectory DEGIL). Sebep: sim-core/CMakeLists.txt test
+    # hedeflerini (doctest/third_party) de cagiriyor; render ayri bir proje ve
+    # motor + simulasyonu tek basina derleyebilmeli. Ayrica kural: o dizinlere
+    # DOKUNULMAZ. Kaynak dosyalar oldugu gibi okunur, hicbiri degistirilmez.
+    ${TSC_SIM_SOURCES}
+)
+
+# --- GUI'siz ofset olcumu ----------------------------------------------------
+# Cizimle AYNI geometriyi (SimScene + coords.h) kullanir; OpenGL GEREKTIRMEZ.
+# "Dikey kol ofseti" iddiasini pencere acmadan tekrarlanabilir sekilde olcer.
+add_executable(tsc_measure_offset
+    tools/measure_offset.cpp
+    src/sim_scene.cpp
+    ${TSC_SIM_SOURCES}
+)
+
 # sim-core ve controllers basliklari.
 target_include_directories(tsc_render PRIVATE
+    src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers
+)
+
+target_include_directories(tsc_measure_offset PRIVATE
     src
     ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers
@@ -101,6 +122,7 @@ target_link_libraries(tsc_render PRIVATE GlistEngine)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     set_source_files_properties(
         src/main.cpp src/render_app.cpp src/render_canvas.cpp src/sim_scene.cpp
+        tools/measure_offset.cpp
         PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra"
     )
 endif()

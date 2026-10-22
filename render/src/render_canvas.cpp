@@ -10,13 +10,31 @@
 
 #include <GLFW/glfw3.h>   // GLFW_KEY_HOME (Home tusu; engine pkg-config ile erisir)
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <set>
+#include <string>
 #include <utility>
 
 namespace tsc {
 namespace render {
+
+void OffsetStats::add(double latM, double tileM) {
+    if (samples == 0) {
+        latMin = latMax = latM;
+        tileMin = tileMax = tileM;
+    } else {
+        latMin = std::min(latMin, latM);
+        latMax = std::max(latMax, latM);
+        tileMin = std::min(tileMin, tileM);
+        tileMax = std::max(tileMax, tileM);
+    }
+    latSum += latM;
+    tileSum += tileM;
+    ++samples;
+}
 
 namespace {
 // Izgara cizimi: 9x7 hucre, hucre basina piksel. 1280x720 pencereye sigar.
@@ -35,7 +53,7 @@ float py(double cy) { return static_cast<float>(kOriginY) + static_cast<float>(c
 }  // namespace
 
 RenderCanvas::RenderCanvas(RenderApp* root)
-    : gBaseCanvas(root), scene(1, 10), scene3d(1280, 720) {
+    : gBaseCanvas(root), scene(1, 1), scene3d(1280, 720) {
     this->root = root;
 }
 
@@ -48,11 +66,33 @@ void RenderCanvas::setup() {
               << "  sim hizi: " << scene.stepsPerSecond() << " adim/sn" << std::endl;
     std::cout << "[render] 3B modeller: " << (scene3d.modelsLoaded() ? "YUKLENDI" : "YOK")
               << " (araba + yol)" << std::endl;
+
+    // HUD (IG-3): metin cizimi icin alfa karisimi gerekir. Fontlar
+    // assets/fonts/ altindan yuklenir (motor ayni yolu GUI icin de kullanir).
+    enableAlphaBlending();
+    const bool boldok = hudfont_.loadFont("FreeSansBold.ttf", 18);
+    const bool smallok = hudfontsmall_.loadFont("FreeSans.ttf", 14);
+    hudok_ = boldok && smallok;
+    std::cout << "[render] HUD fontu: " << (hudok_ ? "YUKLENDI" : "YOK (HUD cizilmeyecek)")
+              << std::endl;
+
+    // Karo eksenleri ve ofset olcumu hakkinda baslangic kaydi (kanit).
+    std::cout << "[render] karo ekseni: dikey kollar 90 derece dondurulur" << std::endl;
 }
 
 void RenderCanvas::update() {
     // Simulasyonu kare hizindan BAGIMSIZ ilerlet: gecen gercek sureyi ver.
     scene.advance(static_cast<double>(root->getElapsedTime()));
+
+    // Ofset olcumu (~2 sn'de bir): araclarin serit merkezine ve cizilen KARO
+    // eksenine dik uzakligi. Duraklatildiginda sayac dondurulur (ayni satiri
+    // tekrar basmamak icin) — P tusu olcumu degistirmez.
+    if (scene.paused()) {
+        offcounter_ = 0;
+    } else if (++offcounter_ >= 120) {
+        offcounter_ = 0;
+        measureLaneOffset();
+    }
 
     // FPS logu (trafik akarken olculur).
     fpssum += static_cast<double>(root->getFramerate());
@@ -70,15 +110,42 @@ void RenderCanvas::draw() {
     clearColor(18, 24, 22);
     if (scene3d.modelsLoaded()) {
         drawScene3D();
-        return;
+    } else {
+        //3B model yoksa2D yedek.
+        drawRoads();
+        drawJunctions();
+        drawVehicles();
     }
-    //3B model yoksa2D yedek.
-    drawRoads();
-    drawJunctions();
-    drawVehicles();
+    drawHud();  // IG-3: saat ekranda; 2B katman, sahnenin ustune
 }
 
 void RenderCanvas::keyPressed(int key) {
+    // 1..8: simulasyon hizi (IG-2). Her tus kac sim-sn/sn oldugunu belirler.
+    // 1 = gercek zamanli, 8 = 8x. Kare hizindan bagimsiz akumulator kullanilir.
+    if (key >= '1' && key <= '8') {
+        const int hiz = key - '0';
+        scene.setStepsPerSecond(hiz);
+        std::cout << "[render] sim hizi: " << scene.stepsPerSecond() << "x ("
+                  << scene.stepsPerSecond() << " adim/sn)" << std::endl;
+        return;
+    }
+    // T: talep profili (IG-3): sabit -> sabah zirvesi -> aksam zirvesi.
+    // Profil varis ZAMANLARINI degistirir; arac sayisi sabittir. Dunya ayni
+    // tohumla yeniden kurulur (determinizm korunur).
+    if (key == 't' || key == 'T') {
+        DemandProfile sonraki = DemandProfile::Uniform;
+        switch (scene.demandProfile()) {
+            case DemandProfile::Uniform:     sonraki = DemandProfile::MorningPeak; break;
+            case DemandProfile::MorningPeak: sonraki = DemandProfile::EveningPeak; break;
+            case DemandProfile::EveningPeak: sonraki = DemandProfile::Uniform; break;
+        }
+        scene.setDemandProfile(sonraki);
+        offhorizontal_ = OffsetStats{};
+        offvertical_ = OffsetStats{};
+        std::cout << "[render] talep profili: " << toString(sonraki)
+                  << "  (arac sayisi sabit, varis zamanlari degisir)" << std::endl;
+        return;
+    }
     // D: hata ayiklama katmanini ac/kapa.
     if (key == 'd' || key == 'D') {
         debuglayer = !debuglayer;
@@ -95,10 +162,17 @@ void RenderCanvas::keyPressed(int key) {
                   << "  sim-sn: " << scene.world().time() << std::endl;
         return;
     }
+    // M: ofset olcumunu hemen bas (beklemeden).
+    if (key == 'm' || key == 'M') {
+        measureLaneOffset();
+        return;
+    }
     // HOME: simulasyonu ayni tohumla basa dondur — bitince araclari yeniden
     // gormek ve yon dogrulamasini tekrarlamak icin.
     if (key == GLFW_KEY_HOME) {
         scene.reset();
+        offhorizontal_ = OffsetStats{};
+        offvertical_ = OffsetStats{};
         std::cout << "[render] simulasyon YENIDEN BASLATILDI (Home)"
                   << std::endl;
         return;
@@ -114,6 +188,12 @@ void RenderCanvas::drawScene3D() {
     // to-dugum) doseliyor — ayni kaynak debug mavi cizgisinin kaynagi. Boylece
     // "mavi cizgi var, altinda karo yok" kalmasin (0 hucreli kollar dahil).
     // Ayni hucreyi iki serit paylasir; tekrar dosememek icin set.
+    // KAVSAK hucreleri burada ATLANIR: onlar ayri cizilir (tek kez).
+    std::set<std::pair<int, int>> junctioncells;
+    for (const JunctionId j : net.signalJunctions()) {
+        const Vec2i c = net.node(j).cell;
+        junctioncells.insert({c.x, c.y});
+    }
     std::set<std::pair<int, int>> tiled;
     for (const LaneId lid : net.allLanes()) {
         const std::vector<Vec2d> path = scene.laneCenterPath(lid);
@@ -121,12 +201,16 @@ void RenderCanvas::drawScene3D() {
             // laneCenterPath x+0.5 (hucre merkezi) dondurur; floor ile hucre indeksi.
             const int cx = static_cast<int>(std::floor(p.x));
             const int cy = static_cast<int>(std::floor(p.y));
-            if (tiled.insert({cx, cy}).second) {
-                scene3d.drawRoadTile(Vec2i{cx, cy});
-            }
+            if (junctioncells.count({cx, cy}) != 0) continue;
+            if (!tiled.insert({cx, cy}).second) continue;
+            // KARO YONU: hucrenin ekseni serit geometrisinden TURETILIR
+            // (SimScene::roadAxisAt). Dikey kolda karo 90° dondurulur, yoksa
+            // yol cizgileri aracin gidis yonune dik kalir (olculen hata).
+            const RoadAxis axis = scene.roadAxisAt(Vec2i{cx, cy});
+            scene3d.drawRoadTile(Vec2i{cx, cy}, axis == RoadAxis::NorthSouth);
         }
     }
-    // Kavsong karolari (kavsong hucresi): sinyalli dugumler.
+    // Kavsak karolari (kavsak hucresi): sinyalli dugumler. Tek kez cizilir.
     for (const JunctionId j : net.signalJunctions()) {
         scene3d.drawJunctionTile(net.node(j).cell);
     }
@@ -190,6 +274,87 @@ void RenderCanvas::drawScene3D() {
     }
 
     scene3d.end();
+}
+
+void RenderCanvas::measureLaneOffset() {
+    // Olcum matematigi SimScene'de TEK yerde (cizimle ayni fonksiyonlar).
+    // Burada yalnizca yatay/dikey gruplara ayirip raporluyoruz.
+    for (const SimScene::VehicleOffset& o : scene.measureVehicleOffsets()) {
+        if (o.horizontal) {
+            offhorizontal_.add(o.lateralM, o.tileM);
+        } else {
+            offvertical_.add(o.lateralM, o.tileM);
+        }
+    }
+
+    const auto printStats = [](const char* ad, const OffsetStats& s) {
+        if (s.samples == 0) {
+            std::printf("[olcum] %-5s: ornek YOK (o yonde arac cizilmedi)\n", ad);
+            return;
+        }
+        const bool ok = std::abs(s.latMin - kLaneOffsetM) < 0.05 &&
+                        std::abs(s.latMax - kLaneOffsetM) < 0.05 &&
+                        std::abs(s.tileMin - kLaneOffsetM) < 0.05 &&
+                        std::abs(s.tileMax - kLaneOffsetM) < 0.05;
+        std::printf("[olcum] %-5s n=%-4d serit merkezi %.3f..%.3f m (ort %.3f) | "
+                    "karo ekseni %.3f..%.3f m (ort %.3f) | beklenen %.2f -> %s\n",
+                    ad, s.samples,
+                    s.latMin, s.latMax, s.latSum / s.samples,
+                    s.tileMin, s.tileMax, s.tileSum / s.samples,
+                    kLaneOffsetM, ok ? "OK" : "FARKLI");
+    };
+    printStats("yatay", offhorizontal_);
+    printStats("dikey", offvertical_);
+}
+
+void RenderCanvas::drawHud() {
+    if (!hudok_) return;
+    const World& w = scene.world();
+    const Metrics& m = w.metrics();
+
+    int active = 0;
+    for (const Vehicle& v : w.vehicles()) {
+        if (v.valid()) ++active;
+    }
+
+    // Saat sim-core'dan okunur (World::hourOfDay); burada TEKRAR hesaplanmaz.
+    const int dakika = static_cast<int>(std::lround(w.hourOfDay() * 60.0)) % (24 * 60);
+    char saat[8];
+    std::snprintf(saat, sizeof saat, "%02d:%02d", dakika / 60, dakika % 60);
+
+    char satir1[192];
+    std::snprintf(satir1, sizeof satir1, "Saat %s   profil %s (x%.2f)   hiz %dx%s",
+                  saat, toString(scene.demandProfile()), w.demandMultiplier(),
+                  scene.stepsPerSecond(),
+                  scene.paused() ? "   DURAKLATILDI" : "");
+
+    char satir2[192];
+    std::snprintf(satir2, sizeof satir2,
+                  "arac %d/%d   varan %d   tikanma %d/%d   sim-sn %.0f   FPS %d",
+                  active, w.config().vehicleCount, m.arrived, m.stalledNow,
+                  m.maxStalled, w.time(), root->getFramerate());
+
+    char durum[192];
+    if (w.finished()) {
+        std::snprintf(durum, sizeof durum, "SIM BITTI (tum araclar hedefe ulasti)");
+    } else if (w.timedOut()) {
+        std::snprintf(durum, sizeof durum, "SIM BITTI (zaman asimi)");
+    } else {
+        std::snprintf(durum, sizeof durum,
+                      "[1-8] hiz  [P] duraklat  [T] profil  [D] debug  [M] olcum  [Home] bastan");
+    }
+
+    // Panel (alfa karisimli) + metinler. Renk renderer'a setColor ile verilir;
+    // gFont::drawText bu rengi kullanir.
+    setColor(8, 12, 10, 170);
+    gDrawRectangle(14.0f, 14.0f, 640.0f, 104.0f, true);
+
+    setColor(235, 245, 235);
+    hudfont_.drawText(satir1, 26.0f, 24.0f);
+    setColor(190, 205, 195);
+    hudfontsmall_.drawText(satir2, 26.0f, 54.0f);
+    setColor(140, 160, 150);
+    hudfontsmall_.drawText(durum, 26.0f, 78.0f);
 }
 
 void RenderCanvas::drawDebugLayer() {

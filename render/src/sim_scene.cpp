@@ -6,6 +6,8 @@
 
 #include "sim_scene.h"
 
+#include "coords.h"   // applyLaneOffset / kCellToMeters (olcumde cizimle AYNI)
+
 #include <algorithm>
 #include <cmath>
 
@@ -30,9 +32,10 @@ Grid buildRenderGrid() {
 
 SimScene::SimScene(std::uint64_t seed, int stepsPerSecond)
     : net_(buildNetwork(buildRenderGrid())),
-      world_(net_, WorldConfig{}, seed),
+      world_(net_, config_, seed),
       driver_(world_, defaultFactory()),
       seed_(seed) {
+    buildRoadAxes();
     setStepsPerSecond(stepsPerSecond);
 }
 
@@ -50,11 +53,102 @@ void SimScene::reset() {
     // World/Network/SignalDriver'in hibirinde kullanici tanimli dtor/copy
     // yok (olcum): yerinde atanabilirler. sim-core'a dokunulmaz.
     net_ = buildNetwork(buildRenderGrid());
-    world_ = World(net_, WorldConfig{}, seed_);
+    world_ = World(net_, config_, seed_);
     driver_ = SignalDriver(world_, defaultFactory());
     accumulator_ = 0.0;
     paused_ = false;
+    buildRoadAxes();
 }
+
+void SimScene::setDemandProfile(DemandProfile profile) {
+    // IG-3: profil yalnizca varis ZAMANLARINI degistirir (arac sayisi sabit).
+    // Profil degisimi dunya kurulumunu gerektirir; ayni tohumla basa donulur
+    // (determinizm: ayni tohum + ayni profil = ayni kosu). Duraklatma durumu
+    // KORUNUR: profil degistirmek kullaniciyi istemeden kosuya sokmaz.
+    const bool wasPaused = paused_;
+    config_.profile = profile;
+    reset();
+    paused_ = wasPaused;
+}
+
+void SimScene::buildRoadAxes() {
+    // Karo eksenini TAHMIN etme: her seridin cizim yolunu (from -> cells ->
+    // to) yuru, her SEGMENTIN eksenini o segmentin dokundugu iki hucreye yaz.
+    // Ayni hucre iki farkli eksenden segment goruyorsa -> Both (kavsak).
+    roadAxes_.clear();
+    const auto mark = [this](const Vec2i& c, RoadAxis axis) {
+        const auto key = std::make_pair(c.x, c.y);
+        const auto it = roadAxes_.find(key);
+        if (it == roadAxes_.end()) {
+            roadAxes_.emplace(key, axis);
+        } else if (it->second != axis) {
+            it->second = RoadAxis::Both;
+        }
+    };
+    const auto cellOf = [](const Vec2d& p) {
+        return Vec2i{static_cast<int>(std::floor(p.x)),
+                     static_cast<int>(std::floor(p.y))};
+    };
+
+    for (const LaneId lid : net_.allLanes()) {
+        const std::vector<Vec2d> path = laneCenterPath(lid);
+        for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+            const double dx = path[i + 1].x - path[i].x;
+            const double dz = path[i + 1].y - path[i].y;
+            if (dx == 0.0 && dz == 0.0) continue;
+            const RoadAxis axis = (std::abs(dx) >= std::abs(dz))
+                                      ? RoadAxis::EastWest
+                                      : RoadAxis::NorthSouth;
+            mark(cellOf(path[i]), axis);
+            mark(cellOf(path[i + 1]), axis);
+        }
+    }
+}
+
+RoadAxis SimScene::roadAxisAt(const Vec2i& cell) const {
+    const auto it = roadAxes_.find(std::make_pair(cell.x, cell.y));
+    if (it == roadAxes_.end()) return RoadAxis::EastWest;  // yol olmayan hucre
+    return it->second;
+}
+
+std::vector<SimScene::VehicleOffset> SimScene::measureVehicleOffsets(
+    bool forceUnrotatedTiles) const {
+    std::vector<VehicleOffset> out;
+    for (const Vehicle& v : world_.vehicles()) {
+        if (!v.valid()) continue;
+        const Vec2d p = lanePointAt(v.currentLane, v.position);
+        const Vec2d d = laneDirAt(v.currentLane, v.position);
+        const double len = std::sqrt(d.x * d.x + d.y * d.y);
+        if (len < 1e-9) continue;  // geometri yok: olcum yapilamaz
+        const double fx = d.x / len;
+        const double fz = d.y / len;
+        // coords.h headingRight(h) = (cos h, -sin h), h = atan2(dirX, dirZ).
+        const double rx = fz;
+        const double rz = -fx;
+        const double h = std::atan2(d.x, d.y);
+        double cx = 0.0, cz = 0.0;
+        applyLaneOffset(p.x, p.y, h, cx, cz);
+
+        VehicleOffset o;
+        o.lane = v.currentLane;
+        o.horizontal = std::abs(fx) > std::abs(fz);
+        o.lateralM = ((cx - p.x) * rx + (cz - p.y) * rz) * kCellToMeters;
+
+        const Vec2i cell{static_cast<int>(std::floor(p.x)),
+                         static_cast<int>(std::floor(p.y))};
+        const RoadAxis axis = roadAxisAt(cell);
+        if (axis == RoadAxis::Both) continue;  // kavsak hucresi
+        const RoadAxis effective = forceUnrotatedTiles ? RoadAxis::EastWest : axis;
+        const double cellcx = static_cast<double>(cell.x) + 0.5;
+        const double cellcz = static_cast<double>(cell.y) + 0.5;
+        o.tileM = (effective == RoadAxis::EastWest ? std::abs(cz - cellcz)
+                                                   : std::abs(cx - cellcx)) *
+                  kCellToMeters;
+        out.push_back(o);
+    }
+    return out;
+}
+
 
 void SimScene::setStepsPerSecond(int n) {
     // 0 veya negatif "dur" demektir; 1..kMaxStepsPerFrame araligina sikistir.

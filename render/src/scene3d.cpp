@@ -77,12 +77,15 @@ void Scene3D::end() {
     camera_.end();
 }
 
-void Scene3D::drawRoadTile(const Vec2i& cell) {
+void Scene3D::drawRoadTile(const Vec2i& cell, bool alongZ) {
     if (!roadloaded_) return;
     road_.setPosition((static_cast<float>(cell.x) + 0.5f) * kCellWorld - centerx_,
                       0.0f,
                       (static_cast<float>(cell.y) + 0.5f) * kCellWorld - centerz_);
-    road_.setOrientation(glm::vec3(0.0f));
+    // KARO YONU (olculdu): road-straight.obj'de asfalt + serit cizgileri X
+    // ekseni boyunca uzanir, kaldirim bantlari Z kenarindadir. Dikey kolda
+    // 90° dondurulmezse aracin gidis yonu ile yolun cizgileri DIK kalir.
+    road_.setOrientation(glm::vec3(0.0f, alongZ ? glm::radians(90.0f) : 0.0f, 0.0f));
     // setScale (mutlak); scale() birikimli oldugu icin her karede sifirlardi.
     road_.setScale(kCellWorld);
     road_.draw();

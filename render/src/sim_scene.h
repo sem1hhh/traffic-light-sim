@@ -19,6 +19,8 @@
 #include "fixed_time.hpp"       // FixedTimeController
 
 #include <cstdint>
+#include <map>
+#include <utility>
 #include <vector>
 
 namespace tsc {
@@ -30,6 +32,19 @@ namespace render {
 struct Vec2d {
     double x = 0.0;
     double y = 0.0;
+};
+
+/// Bir izgara hucresine dosenen yol karosunun YOL EKSENI.
+///
+/// Neden gerekli: Kenney `road-straight.obj` karosunda asfalt/serit cizgileri
+/// X ekseni boyunca uzanir (olculdu: asfalt x[-0.5,0.5], z[-0.4,0.4]; kaldirim
+/// bantlari z kenarinda). Dikey kollarda karo 90° dondurulmezse yol, aracin
+/// gidis yonune DIK cizilir — arac "yolun ortasinda/tasmayan" gorunur. Bu tip
+/// karo yonunu TAHMIN etmez; hucreden gecen serit GEOMETRISINDEN turetir.
+enum class RoadAxis : std::uint8_t {
+    EastWest = 0,   ///< yol X boyunca (karo dondurulmez)
+    NorthSouth = 1, ///< yol Z boyunca (karo Y ekseninde 90°)
+    Both = 2        ///< iki yonde de serit var (kavsak hucreleri)
 };
 
 /// Render katmaninin izgara senaryosu (uc kavsakli T ag).
@@ -73,6 +88,33 @@ public:
     int stepsPerSecond() const noexcept { return stepsPerSecond_; }
     void setStepsPerSecond(int n);
 
+    /// Talep profilini degistirir (IG-3: sabah/aksam zirvesi). World, AYNI
+    /// tohum ve ayni adim hiziyla yeniden kurulur (profil varis ZAMANLARINI
+    /// belirler; arac sayisi sabittir — sim-core kurali).
+    void setDemandProfile(DemandProfile profile);
+    DemandProfile demandProfile() const noexcept { return config_.profile; }
+    /// Ekranda gosterilecek saat (IG-3). World'dan okunur, TURETILMEZ.
+    double hourOfDay() const noexcept { return world_.hourOfDay(); }
+
+    /// Bir izgara hucresinin karo ekseni. Hucreye dokunan serit
+    /// segmentlerinden turetilmistir (kurulumda bir kez).
+    RoadAxis roadAxisAt(const Vec2i& cell) const;
+
+    /// Bir aracin cizim konumunun olculmus ofseti (metre).
+    struct VehicleOffset {
+        LaneId lane;
+        bool horizontal = true;   ///< serit yonu X agirlikli mi
+        double lateralM = 0.0;    ///< SERIT MERKEZINE dik uzaklik (beklenen 1.75)
+        double tileM = 0.0;       ///< CIZILEN KARO eksenine dik uzaklik (beklenen 1.75)
+    };
+
+    /// Aktif araclarin ofsetlerini olcer. Cizimde kullanilan fonksiyonlarin
+    /// (lanePointAt/laneDirAt/applyLaneOffset/roadAxisAt) AYNISINI kullanir;
+    /// kavsak hucresindeki araclar atlanir (karo ekseni tanimsiz).
+    /// `forceUnrotatedTiles`: YALNIZCA teshis icin. Butun karolari dondurulmemis
+    /// (EastWest) varsayar; duzeltme ONCESI davranisi olcer. Uretimde false.
+    std::vector<VehicleOffset> measureVehicleOffsets(bool forceUnrotatedTiles = false) const;
+
     /// Bir serit uzerinde `distMeters` mesafesindeki noktanin IZGARA koordinati.
     /// Cizim piksele cevirmeden once bunu kullanir. Serit disina tasarsa
     /// sinirlar (clamped).
@@ -100,9 +142,14 @@ private:
     /// Fabrika (kurucu ve reset() aynisini kullanir): sabit zamanli kontrolcu.
     static SignalDriver::ControllerFactory defaultFactory();
 
+    /// Karo eksenlerini serit geometrisinden turetir (kurulumda bir kez).
+    void buildRoadAxes();
+
     Network net_;
-    World world_;
+    WorldConfig config_{};      ///< profil/arac sayisi vb. (IG-3 profil secimi)
+    World world_;               ///< config_'e bagli: once config_ kurulur
     SignalDriver driver_;
+    std::map<std::pair<int, int>, RoadAxis> roadAxes_;  ///< hucre -> karo ekseni
 
     std::uint64_t seed_ = 0;    ///< reset() ayni tohumla yeniden kurar (Home)
     bool paused_ = false;       ///< P tusu: advance() adim atmaz
