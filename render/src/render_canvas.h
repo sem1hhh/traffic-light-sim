@@ -15,6 +15,8 @@
 #include "scene3d.h"
 #include "sim_scene.h"
 
+#include <vector>
+
 namespace tsc {
 namespace render {
 
@@ -63,6 +65,20 @@ private:
     /// Serit merkezine ve CIZILEN KARO eksenine dik uzakligi olcer (log).
     /// Beklenen: her iki yonde de 1.75 m (kLaneOffsetM). Tolerans disi -> FAIL.
     void measureLaneOffset();
+
+    // --- IG-7 sonuc paneli -------------------------------------------------
+    /// Ayni tohum + ayni senaryoyla uc kontrolcuyu GUI'siz kosar ve tabloyu
+    /// doldurur. Yaklasik 3 x 5 ms surer (olculdu); kareyi kasmaz.
+    void startEvaluation();
+    /// Tohum/senaryo degisti: panel kapanir, eski sonuclar gecersiz olur.
+    void invalidateResults();
+    void drawResultPanel();
+
+    /// Son kosunun uc kontrolcu ozeti (bos: henuz hesaplanmadi).
+    std::vector<EvalRow> evalrows_;
+    bool showresults_ = false;      ///< panel acik mi (G)
+    bool evalautoopened_ = false;   ///< bu kosu icin otomatik acildi mi
+    bool paneldrawn_ = false;       ///< ilk cizimde bir kez log (kanit)
 
     RenderApp* root;
     SimScene scene;

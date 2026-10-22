@@ -124,11 +124,30 @@ void RenderCanvas::setup() {
         std::cout << "[render] UYARI: GLFW penceresi yok; trackpad zoom kapali"
                   << std::endl;
     }
+
+    // Panelin GORSEL dogrulamasi icin: kosunun bitmesini beklemeden ac.
+    // (Kullanici istegi disinda bir sey degistirmez; yalnizca env degiskeni
+    // set edilmisse calisir. Ornek: TSC_SHOW_RESULTS=1 ./build/tsc_render)
+    if (std::getenv("TSC_SHOW_RESULTS") != nullptr) {
+        showresults_ = true;
+        startEvaluation();
+        std::cout << "[sonuc] TSC_SHOW_RESULTS: panel acik baslatildi"
+                  << std::endl;
+    }
 }
 
 void RenderCanvas::update() {
     // Simulasyonu kare hizindan BAGIMSIZ ilerlet: gecen gercek sureyi ver.
     scene.advance(static_cast<double>(root->getElapsedTime()));
+
+    // IG-7: kosu bitti -> sonuc panelini ac ve ayni tohumla uc kontrolcuyu
+    // (sabit / kural / Q) GUI'siz kosup yan yana koy. Yalnizca BIR kez.
+    const World& w = scene.world();
+    if (!evalautoopened_ && (w.finished() || w.timedOut())) {
+        evalautoopened_ = true;
+        showresults_ = true;
+        startEvaluation();
+    }
 
     // FPS logu (trafik akarken olculur).
     fpssum += static_cast<double>(root->getFramerate());
@@ -153,6 +172,9 @@ void RenderCanvas::draw() {
         drawVehicles();
     }
     drawHud();  // IG-3: saat ekranda; 2B katman, sahnenin ustune
+    if (showresults_) {
+        drawResultPanel();  // IG-7: bitince acilan sonuc sayfasi
+    }
 }
 
 void RenderCanvas::keyPressed(int key) {
@@ -178,6 +200,7 @@ void RenderCanvas::keyPressed(int key) {
         scene.setDemandProfile(sonraki);
         offhorizontal_ = OffsetStats{};
         offvertical_ = OffsetStats{};
+        invalidateResults();
         std::cout << "[render] talep profili: " << toString(sonraki)
                   << "  (arac sayisi sabit, varis zamanlari degisir)" << std::endl;
         return;
@@ -210,6 +233,16 @@ void RenderCanvas::keyPressed(int key) {
         scene.cycleController();
         offhorizontal_ = OffsetStats{};
         offvertical_ = OffsetStats{};
+        invalidateResults();
+        return;
+    }
+    // G: sonuc panelini ac/kapa (IG-7). Kosu bitmeden de acilabilir; o anda
+    // panel "o ana kadar" degil, AYNI tohumla TAM kosunun sonucunu gosterir.
+    if (key == 'g' || key == 'G') {
+        showresults_ = !showresults_;
+        if (showresults_ && evalrows_.empty()) {
+            startEvaluation();
+        }
         return;
     }
     // KAMERA: +/- zoom, oklar kaydir, R gorunumu sifirla.
@@ -242,6 +275,7 @@ void RenderCanvas::keyPressed(int key) {
         scene.reset();
         offhorizontal_ = OffsetStats{};
         offvertical_ = OffsetStats{};
+        invalidateResults();
         std::cout << "[render] simulasyon YENIDEN BASLATILDI (Home)"
                   << std::endl;
         return;
@@ -381,6 +415,145 @@ void RenderCanvas::measureLaneOffset() {
     };
     printStats("yatay", offhorizontal_);
     printStats("dikey", offvertical_);
+}
+
+void RenderCanvas::startEvaluation() {
+    evalrows_.clear();
+    const WorldConfig& cfg = scene.worldConfig();
+    const std::uint64_t seed = scene.seed();
+
+    std::cout << "[sonuc] ayni tohumla uc kontrolcu kosuluyor: tohum " << seed
+              << "  (" << cfg.vehicleCount << " arac / " << cfg.spawnInterval
+              << " s / profil " << toString(cfg.profile) << ")" << std::endl;
+
+    const ControllerKind kinds[3] = {ControllerKind::FixedTime,
+                                     ControllerKind::ThresholdRule,
+                                     ControllerKind::QLearning};
+    for (const ControllerKind k : kinds) {
+        const EvalRow row = runHeadless(seed, k, cfg, scene.qPolicy());
+        evalrows_.push_back(row);
+        std::printf("[sonuc] %-22s yolculuk %6.2f s  sistemde %6.2f s  varis %5.1f%%"
+                    "  (%d/%d)  gridlock %d  carpisma %d  sim-sn %.0f%s\n",
+                    row.controller.c_str(), row.averageTravelTime,
+                    row.averageTimeInSystem, row.arrivedFraction * 100.0,
+                    row.arrived, row.spawned, row.stalledEvents, row.collisions,
+                    row.simSeconds,
+                    row.finished && !row.timedOut ? "  tamam" : "  ZAMAN ASIMI");
+    }
+    std::fflush(stdout);
+}
+
+void RenderCanvas::invalidateResults() {
+    evalrows_.clear();
+    showresults_ = false;
+    evalautoopened_ = false;
+    paneldrawn_ = false;
+}
+
+void RenderCanvas::drawResultPanel() {
+    if (!hudok_) return;
+    if (!paneldrawn_) {
+        paneldrawn_ = true;
+        std::cout << "[sonuc] panel ciziliyor: " << evalrows_.size()
+                  << " satir (tohum " << scene.seed() << ")" << std::endl;
+    }
+
+    // Panel: pencere ortasinda. Sabit konum (pencere 1280x720 varsayimi)
+    // yerine mevcut boyuta gore ortalanir.
+    const float w = 980.0f;
+    const float h = 214.0f;
+    const float x = (static_cast<float>(getWidth()) - w) * 0.5f;
+    const float y = (static_cast<float>(getHeight()) - h) * 0.5f;
+
+    setColor(6, 10, 9, 225);
+    gDrawRectangle(x, y, w, h, true);
+    setColor(70, 100, 85, 255);
+    gDrawRectangle(x, y, w, 2.0f, true);  // ince ust cizgi
+
+    const WorldConfig& cfg = scene.worldConfig();
+    char baslik[224];
+    std::snprintf(baslik, sizeof baslik,
+                  "SONUC  -  tohum %llu  -  %d arac / %.1f s  -  profil %s  -  %s",
+                  static_cast<unsigned long long>(scene.seed()),
+                  cfg.vehicleCount, cfg.spawnInterval, toString(cfg.profile),
+                  scene.controllerName());
+    setColor(235, 245, 235);
+    hudfont_.drawText(baslik, x + 22.0f, y + 16.0f);
+
+    // Sutunlar sabit x'te: oransal fontta hizalama ancak boyle saglanir.
+    const float cx[6] = {x + 22.0f, x + 250.0f, x + 384.0f,
+                         x + 518.0f, x + 626.0f, x + 716.0f};
+    const float colstatus = x + 826.0f;
+    const char* basliklar[6] = {"kontrolcu", "ort. yolculuk", "ort. sistemde",
+                                "varis", "gridlock", "sim-sn"};
+    setColor(130, 155, 140);
+    for (int i = 0; i < 6; ++i) {
+        hudfontsmall_.drawText(basliklar[i], cx[i], y + 50.0f);
+    }
+    hudfontsmall_.drawText("durum", colstatus, y + 50.0f);
+
+    // En kisa SANSURSUZ sure yesil. Neden yolculuk degil: yolculuk yalnizca
+    // varanlari sayar; gridlock yapan kontrolcu "daha iyi" gorunur
+    // (denetim.md BULGU 2, AGENTS §8.9). Sansursuz metrik takilanlari da
+    // sayar.
+    double eniyi = -1.0;
+    for (const EvalRow& r : evalrows_) {
+        if (r.ok && (eniyi < 0.0 || r.averageTimeInSystem < eniyi)) {
+            eniyi = r.averageTimeInSystem;
+        }
+    }
+
+    char hucre[64];
+    for (std::size_t i = 0; i < evalrows_.size() && i < 3; ++i) {
+        const EvalRow& r = evalrows_[i];
+        const float ry = y + 80.0f + static_cast<float>(i) * 30.0f;
+        setColor(200, 215, 205);
+        hudfontsmall_.drawText(r.controller.c_str(), cx[0], ry);
+
+        if (!r.ok) {
+            setColor(230, 120, 110);
+            hudfontsmall_.drawText("HATA", cx[1], ry);
+            continue;
+        }
+
+        std::snprintf(hucre, sizeof hucre, "%.1f s", r.averageTravelTime);
+        hudfontsmall_.drawText(hucre, cx[1], ry);
+
+        const bool best = (eniyi >= 0.0 && r.averageTimeInSystem == eniyi);
+        if (best) setColor(130, 230, 150);
+        else      setColor(200, 215, 205);
+        std::snprintf(hucre, sizeof hucre, "%.1f s", r.averageTimeInSystem);
+        hudfontsmall_.drawText(hucre, cx[2], ry);
+        std::snprintf(hucre, sizeof hucre, "%.0f%%", r.arrivedFraction * 100.0);
+        hudfontsmall_.drawText(hucre, cx[3], ry);
+        std::snprintf(hucre, sizeof hucre, "%d", r.stalledEvents);
+        hudfontsmall_.drawText(hucre, cx[4], ry);
+        std::snprintf(hucre, sizeof hucre, "%.0f", r.simSeconds);
+        hudfontsmall_.drawText(hucre, cx[5], ry);
+
+        const char* durum = "tamam";
+        if (r.collisions > 0)      durum = "CARPISMA";
+        else if (r.timedOut)       durum = "zaman asimi";
+        else if (r.stalledEvents)  durum = "gridlock";
+        if (r.timedOut || r.collisions > 0) setColor(230, 140, 120);
+        else if (r.stalledEvents)           setColor(225, 200, 120);
+        else                                setColor(130, 210, 150);
+        hudfontsmall_.drawText(durum, colstatus, ry);
+    }
+
+    if (evalrows_.empty()) {
+        setColor(180, 195, 185);
+        hudfontsmall_.drawText("hesaplaniyor...", cx[0], y + 84.0f);
+    }
+
+    setColor(120, 140, 130);
+    hudfontsmall_.drawText(
+        "[G] kapat   [C] kontrolcu degistir (ayni tohumla yeni kosu)   [Home] bastan",
+        x + 22.0f, y + 182.0f);
+    setColor(95, 115, 105);
+    hudfontsmall_.drawText(
+        "yesil = en kisa ort. sistemde (SANSURSUZ: takilan araclar dahil); varis % ve gridlock ile birlikte oku",
+        x + 22.0f, y + 160.0f);
 }
 
 void RenderCanvas::drawHud() {

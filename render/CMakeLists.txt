@@ -100,6 +100,16 @@ add_executable(tsc_measure_offset
     ${TSC_SIM_SOURCES}
 )
 
+# --- GUI'siz IG-7 kiyaslama --------------------------------------------------
+# Panelin kullandigi AYNI fonksiyonu (runHeadless) cagirir; sayilar pencere
+# acmadan dogrulanabilir. Ayrica "Q satiri sabit zamanliyla ayni mi" kontrolu
+# ile politikanin gercekten kullanildigini kanitlar (AGENTS §8.14).
+add_executable(tsc_eval_check
+    tools/eval_check.cpp
+    src/sim_scene.cpp
+    ${TSC_SIM_SOURCES}
+)
+
 # sim-core ve controllers basliklari.
 target_include_directories(tsc_render PRIVATE
     src
@@ -108,6 +118,12 @@ target_include_directories(tsc_render PRIVATE
 )
 
 target_include_directories(tsc_measure_offset PRIVATE
+    src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers
+)
+
+target_include_directories(tsc_eval_check PRIVATE
     src
     ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers
@@ -122,7 +138,7 @@ target_link_libraries(tsc_render PRIVATE GlistEngine)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     set_source_files_properties(
         src/main.cpp src/render_app.cpp src/render_canvas.cpp src/sim_scene.cpp
-        tools/measure_offset.cpp
+        tools/measure_offset.cpp tools/eval_check.cpp
         PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra"
     )
 endif()

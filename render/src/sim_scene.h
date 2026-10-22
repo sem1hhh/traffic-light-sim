@@ -75,6 +75,36 @@ const char* controllerDisplayName(ControllerKind k) noexcept;
 /// Uygulama `render/` icinden calistirilir; ilk aday ../models/.
 const char* qPolicyPathCandidate(int index) noexcept;
 
+/// Sahne senaryosu — experiments bench'in **medium** rejimiyle ayni degerler.
+/// Canli kosu, IG-7 paneli ve IG-6 egitimi AYNI senaryoyu kullanir.
+WorldConfig renderScenarioConfig();
+
+/// Bir kontrolcunun AYNI tohum + AYNI senaryodaki kosu ozeti (IG-7 paneli).
+struct EvalRow {
+    ControllerKind kind = ControllerKind::FixedTime;
+    std::string controller;         ///< gorunen ad (Q tablosu yoksa notlu)
+    bool ok = false;                ///< kosu yapildi mi (false: hata)
+    double averageTravelTime = 0.0; ///< varanlarin ortalamasi (s) — sansurlu
+    double averageTimeInSystem = 0.0; ///< sansursuz (World::averageTimeInSystem)
+    double arrivedFraction = 0.0;   ///< 0..1
+    int arrived = 0;
+    int spawned = 0;
+    int maxStalled = 0;
+    int stalledEvents = 0;          ///< gridlock olay sayisi (bench ile ayni)
+    int collisions = 0;             ///< K1: daima 0 beklenir
+    double simSeconds = 0.0;
+    bool finished = false;
+    bool timedOut = false;
+};
+
+/// Bir kontrolcuyu GUI'siz, ayni izgarada ve ayni tohumla kosar.
+///
+/// Neden render'da: panel "canli kosunun ayni tohumla uc kontrolcusu" demek.
+/// Is mantigi burada TEKRAR YAZILMAZ; World/SignalDriver/kontrolcu aynen
+/// kullanilir. Karsilastirma kablolamasi render'in isidir.
+EvalRow runHeadless(std::uint64_t seed, ControllerKind kind,
+                    const WorldConfig& cfg, const QLearningController* qpolicy);
+
 class SimScene {
 public:
     /// Kurar ve world'u verilen tohumla baslatir.

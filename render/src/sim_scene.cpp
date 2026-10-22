@@ -21,6 +21,44 @@ namespace render {
 
 namespace {
 
+SignalDriver::ControllerFactory fixedFactory() {
+    return [](JunctionId) -> std::unique_ptr<IController> {
+        return std::make_unique<FixedTimeController>();
+    };
+}
+
+/// Kontrolcu turune gore fabrika. `SimScene` (canli kosu) ve `runHeadless`
+/// (IG-7 paneli) AYNI fabrikayi kullanir: panel ile ekrandaki kosu ayni
+/// kontrolcuyu olcmelidir, yoksa kiyaslama yanlis olur.
+SignalDriver::ControllerFactory factoryFor(ControllerKind kind,
+                                           const QLearningController* policy) {
+    switch (kind) {
+        case ControllerKind::FixedTime:
+            return fixedFactory();
+        case ControllerKind::ThresholdRule:
+            return [](JunctionId) -> std::unique_ptr<IController> {
+                return std::make_unique<ThresholdRuleController>();
+            };
+        case ControllerKind::QLearning: {
+            // Politika SALT-OKUNUR: her kavsak kendi KOPYASINI alir. Boylece
+            // (s,a,r,s') zinciri kavsaklar arasi tasinmaz (controller.hpp
+            // sozlesmesi). Epsilon 0: gosterilen sey OGRENILMIS politikadir,
+            // kesifli politika degil.
+            return [policy](JunctionId) -> std::unique_ptr<IController> {
+                if (policy == nullptr) {
+                    return std::make_unique<FixedTimeController>();
+                }
+                QLearningController c = policy->copy();
+                c.setEpsilon(0.0);
+                return std::make_unique<QLearningController>(std::move(c));
+            };
+        }
+    }
+    return fixedFactory();
+}
+
+}  // namespace
+
 /// Sahne senaryosu — experiments bench'in **medium** rejimiyle AYNI.
 ///
 /// Neden medium: `models/q-medium.txt` bu talep dagiliminda egitildi.
@@ -40,14 +78,6 @@ WorldConfig renderScenarioConfig() {
     c.signal.allRed = 1.0;
     return c;
 }
-
-SignalDriver::ControllerFactory fixedFactory() {
-    return [](JunctionId) -> std::unique_ptr<IController> {
-        return std::make_unique<FixedTimeController>();
-    };
-}
-
-}  // namespace
 
 const char* controllerDisplayName(ControllerKind k) noexcept {
     switch (k) {
@@ -102,30 +132,7 @@ SimScene::SimScene(std::uint64_t seed, int stepsPerSecond)
 }
 
 SignalDriver::ControllerFactory SimScene::makeFactory() const {
-    switch (kind_) {
-        case ControllerKind::FixedTime:
-            return fixedFactory();
-        case ControllerKind::ThresholdRule:
-            return [](JunctionId) -> std::unique_ptr<IController> {
-                return std::make_unique<ThresholdRuleController>();
-            };
-        case ControllerKind::QLearning: {
-            // Politika SALT-OKUNUR: her kavsak kendi KOPYASINI alir. Boylece
-            // (s,a,r,s') zinciri kavsaklar arasi tasinmaz (controller.hpp
-            // sozlesmesi). Epsilon 0: gosterilen sey OGRENILMIS politikadir,
-            // kesifli politika degil.
-            const QLearningController* p = qpolicy_.get();
-            return [p](JunctionId) -> std::unique_ptr<IController> {
-                if (p == nullptr) {
-                    return std::make_unique<FixedTimeController>();
-                }
-                QLearningController c = p->copy();
-                c.setEpsilon(0.0);
-                return std::make_unique<QLearningController>(std::move(c));
-            };
-        }
-    }
-    return fixedFactory();
+    return factoryFor(kind_, qpolicy_.get());
 }
 
 bool SimScene::loadQPolicy(const std::string& path) {
@@ -432,6 +439,46 @@ Vec2d SimScene::laneDirAt(LaneId laneId, double distMeters) const {
         return Vec2d{0.0, 0.0};
     }
     return Vec2d{dx, dz};
+}
+
+EvalRow runHeadless(std::uint64_t seed, ControllerKind kind,
+                    const WorldConfig& cfg, const QLearningController* qpolicy) {
+    EvalRow row;
+    row.kind = kind;
+    row.controller = controllerDisplayName(kind);
+    if (kind == ControllerKind::QLearning) {
+        // Kural: Q secildi ama tablo yoksa canli kosu sabit zamanliya duser
+        // (setController). Panelde de AYNI sey yazilmali, yoksa "Q-learning"
+        // satiri aslinda sabit zamanliyi olcup kullaniciyi yaniltirdi.
+        row.controller = (qpolicy != nullptr) ? "Q-learning" : "Q-learning (tablo yok)";
+    }
+
+    Network net = buildNetwork(buildRenderGrid());
+    World world(net, cfg, seed);
+    SignalDriver driver(world, factoryFor(kind, qpolicy));
+
+    // Adim siniri: World kendi zaman asimini uygular (timeLimit). Yine de
+    // sonsuz donguye karsi sert bir sinir (timeLimit + 10 sn) konur.
+    const auto maxsteps = static_cast<long long>(cfg.timeLimit) + 10;
+    for (long long i = 0; i < maxsteps; ++i) {
+        if (world.finished() || world.timedOut()) break;
+        driver.step();
+    }
+
+    const Metrics& m = world.metrics();
+    row.ok = true;
+    row.averageTravelTime = m.averageTravelTime();
+    row.averageTimeInSystem = world.averageTimeInSystem();
+    row.arrivedFraction = m.arrivedFraction();
+    row.arrived = m.arrived;
+    row.spawned = m.spawned;
+    row.maxStalled = m.maxStalled;
+    row.stalledEvents = m.stalledEvents;
+    row.collisions = m.collisions;
+    row.simSeconds = world.time();
+    row.finished = world.finished();
+    row.timedOut = world.timedOut();
+    return row;
 }
 
 }  // namespace render
