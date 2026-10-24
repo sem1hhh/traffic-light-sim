@@ -14,7 +14,12 @@
 #include "render_app.h"
 #include "scene3d.h"
 #include "sim_scene.h"
+#include "trainer.h"
 
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <vector>
 
 namespace tsc {
@@ -79,6 +84,21 @@ private:
     bool showresults_ = false;      ///< panel acik mi (G)
     bool evalautoopened_ = false;   ///< bu kosu icin otomatik acildi mi
     bool paneldrawn_ = false;       ///< ilk cizimde bir kez log (kanit)
+
+    // --- IG-6 egitim (arka plan) -------------------------------------------
+    /// E tusu: egitimi worker thread'inde baslatir. Ogrenme TEK is
+    /// parcaciginda (İOG-3); arayuz yalnizca ilerleme kopyasini okur.
+    void startTraining(int episodes);
+    /// Her karede: ilerleme logu + biten egitimin politikasini devral.
+    void pollTraining();
+    /// Alt soldaki egitim paneli + ilerleme cubugu.
+    void drawTrainPanel();
+
+    BackgroundTrainer trainer_;
+    int trainlogged_ = 0;  ///< son loglanan bolum (periyodik log icin)
+    bool trainfaillogged_ = false;  ///< hata satiri bir kez basilir
+    bool trainpaneldrawn_ = false;  ///< panelin ilk cizimi bir kez log (kanit)
+    int frames_ = 0;                ///< ilk kareler isinma payi (olcum disi)
 
     RenderApp* root;
     SimScene scene;

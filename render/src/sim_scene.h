@@ -52,10 +52,13 @@ enum class RoadAxis : std::uint8_t {
 
 /// Render katmaninin izgara senaryosu (uc kavsakli T ag).
 ///
-/// Bu, experiments/bench'in buildScenarioGrid fonksiyonunun birebir aynisidir.
-/// Cogaltildi cunku experiments/ bir kutuphane hedefi DEGIL (executabledir)
-//   ve kural gereği experiments/ dosyalarina DOKUNULMAZ. Cizim/demo
-/// iskeletidir; asil izgara editoru (IG-1) bunun yerini alacak.
+/// experiments/bench'in buildScenarioGrid fonksiyonuyla AYNI hucreleri uretir.
+/// Neden hala ayri: bu baslik tsc_measure_offset / tsc_eval_check tarafindan
+/// da kullanilir ve o hedefler experiments/ kaynaklarini DERLEMEZ (GUI'siz ve
+/// motorsuz calisirlar). IG-6 egitimi experiments/train.cpp'yi dogrudan
+/// derler; egitim izgarasinin canli izgarayla AYNI oldugu
+/// BackgroundTrainer::start icinde hucre hucre DOGRULANIR (varsayim degil).
+/// Cizim/demo iskeletidir; asil izgara editoru (IG-1) bunun yerini alacak.
 Grid buildRenderGrid();
 
 /// Render katmaninda secilebilen kontrolcu (C tusu).
@@ -71,8 +74,19 @@ enum class ControllerKind : std::uint8_t {
 /// HUD/log icin Turkce ad.
 const char* controllerDisplayName(ControllerKind k) noexcept;
 
+/// IG-6: arayuzde (Train tusu) egitilen modelin yazildigi aday yollar.
+///
+/// `qPolicyPathCandidate` bunlari depodaki `q-medium.txt`'den ONCE dener:
+/// egitilmis model varsa yeniden kullanilir (IG-6 "kaydedilip yeniden
+/// kullanilabilmeli"); dosya yoksa davranis DEGISMEZ (q-medium yuklenir).
+constexpr const char* kTrainedPolicyPaths[] = {
+    "../models/q-medium-trained.txt",
+    "models/q-medium-trained.txt",
+};
+
 /// Q politikasi dosyasi icin varsayilan aday yollar (cwd'ye gore).
 /// Uygulama `render/` icinden calistirilir; ilk aday ../models/.
+/// Siralama: egitilmis model (varsa) -> depodaki medium modeli.
 const char* qPolicyPathCandidate(int index) noexcept;
 
 /// Sahne senaryosu — experiments bench'in **medium** rejimiyle ayni degerler.

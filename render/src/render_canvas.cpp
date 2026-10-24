@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <set>
 #include <string>
@@ -134,11 +135,106 @@ void RenderCanvas::setup() {
         std::cout << "[sonuc] TSC_SHOW_RESULTS: panel acik baslatildi"
                   << std::endl;
     }
+
+    // IG-6 dogrulama kancasi (yalnizca ortam degiskeni verilmisse):
+    //   TSC_TRAIN=N            -> acilista N bolumluk arka plan egitimini baslat
+    //   TSC_QUIT_AFTER_TRAIN=1 -> egitim bitince cik (GUI'siz dogrulama)
+    // Normal calismayi etkilemez: ikisi de varsayilan olarak KAPALI.
+    if (const char* egitim = std::getenv("TSC_TRAIN")) {
+        startTraining(std::atoi(egitim));
+    }
+}
+
+void RenderCanvas::startTraining(int episodes) {
+    // Onceki egitim bittiyse politikasi kaybolmasin (E'ye arka arkaya basmak).
+    QLearningController biten;
+    if (trainer_.takeFinished(biten)) {
+        scene.adoptQPolicy(std::move(biten));
+        invalidateResults();
+    }
+    // Egitim CANLI senaryoyla ayni talep profilini kullanir: farkli bir
+    // dagilimda egitilen politika canli kosuda "egitildigi isi" yapmaz.
+    if (!trainer_.start(episodes, scene.worldConfig())) {
+        const BackgroundTrainer::Snapshot s = trainer_.snapshot();
+        std::cout << "[egitim] zaten suruyor: " << s.done << "/" << s.episodes
+                  << " (yeni egitim baslatilmadi)" << std::endl;
+        return;
+    }
+    trainlogged_ = 0;
+    trainfaillogged_ = false;
+}
+
+void RenderCanvas::pollTraining() {
+    const auto s = trainer_.snapshot();
+
+    // Periyodik log: 50 bolumde bir. Ilerlemenin GERCEKTEN aktigini konsolda
+    // gorunur kilar (HUD tek basina dogrulama degildir).
+    if (s.state == BackgroundTrainer::State::Running && s.done != trainlogged_ &&
+        (s.done % 50 == 0)) {
+        trainlogged_ = s.done;
+        const double yuzde =
+            100.0 * static_cast<double>(s.done) / static_cast<double>(s.episodes);
+        std::printf("[egitim] %d/%d (%.0f%%)  eps %.3f  deger %.2f s  "
+                    "durum %d/2560  gecen %.1f s  en uzun kare %.1f ms\n",
+                    s.done, s.episodes, yuzde, s.epsilon, s.evalTravelTime,
+                    s.visitedStates, s.elapsedSeconds, s.maxFrameMs);
+        std::fflush(stdout);
+    }
+
+    // Biten egitimin politikasini BIR KEZ devral (İOG-3: worker durmustur).
+    QLearningController policy;
+    if (trainer_.takeFinished(policy)) {
+        const auto b = trainer_.snapshot();
+        std::printf("[egitim] bitti: %d/%d bolum  %.1f s  durum %d/2560  "
+                    "en uzun kare %.1f ms (arayuz donmadi)\n",
+                    b.done, b.episodes, b.elapsedSeconds, b.visitedStates,
+                    b.maxFrameMs);
+        if (b.saved) {
+            std::printf("[egitim] model yazildi: %s  (sonraki acilista once "
+                        "bu dosya yuklenir)\n", b.savePath.c_str());
+        } else {
+            std::printf("[egitim] UYARI: model dosyaya yazilamadi: %s\n",
+                        b.message.c_str());
+        }
+        std::fflush(stdout);
+        scene.adoptQPolicy(std::move(policy));
+        invalidateResults();  // yeni tablo -> eski panel sonuclari gecersiz
+        std::cout << "[egitim] yeni tablo devralindi; [C] ile Q-learning secilir"
+                  << std::endl;
+    }
+
+    if (s.state == BackgroundTrainer::State::Failed && !trainfaillogged_) {
+        trainfaillogged_ = true;
+        std::cout << "[egitim] HATA: " << s.message << std::endl;
+    }
+
+    // Dogrulama kancasi: egitim bittiyse (basarili/basarisiz) cik.
+    const bool bitti = s.state == BackgroundTrainer::State::Done ||
+                       s.state == BackgroundTrainer::State::Failed ||
+                       s.state == BackgroundTrainer::State::Cancelled;
+    if (bitti && std::getenv("TSC_QUIT_AFTER_TRAIN") != nullptr) {
+        std::cout << "[egitim] TSC_QUIT_AFTER_TRAIN: cikiliyor" << std::endl;
+        std::cout.flush();
+        std::exit(0);
+    }
 }
 
 void RenderCanvas::update() {
+    // IG-6: egitim SURERKEN arayuz karesinin suresini olc (donma kaniti).
+    // Ilk UC kare atlanir: onlarin dt'si kare suresi degil, pencere/shader/
+    // font kurulumunun tamamidir (olculdu: egitimsiz kosuda da ilk iki kare
+    // ~41-45 ms; bu, egitimin degil acilisin maliyetidir).
+    const double dt = static_cast<double>(root->getElapsedTime());
+    ++frames_;
+    if (frames_ > 3) {
+        trainer_.noteFrame(dt);
+    }
+
     // Simulasyonu kare hizindan BAGIMSIZ ilerlet: gecen gercek sureyi ver.
-    scene.advance(static_cast<double>(root->getElapsedTime()));
+    scene.advance(dt);
+
+    // IG-6: ilerleme logu + biten egitimin politikasini devral.
+    pollTraining();
 
     // IG-7: kosu bitti -> sonuc panelini ac ve ayni tohumla uc kontrolcuyu
     // (sabit / kural / Q) GUI'siz kosup yan yana koy. Yalnizca BIR kez.
@@ -172,6 +268,7 @@ void RenderCanvas::draw() {
         drawVehicles();
     }
     drawHud();  // IG-3: saat ekranda; 2B katman, sahnenin ustune
+    drawTrainPanel();  // IG-6: egitim ilerlemesi (arka plan)
     if (showresults_) {
         drawResultPanel();  // IG-7: bitince acilan sonuc sayfasi
     }
@@ -210,6 +307,12 @@ void RenderCanvas::keyPressed(int key) {
         debuglayer = !debuglayer;
         std::cout << "[render] hata ayiklama katmani: "
                   << (debuglayer ? "ACIK" : "KAPALI") << std::endl;
+        return;
+    }
+    // E: IG-6 Train tusu. Egitim ARKA PLANDA, TEK is parcaciginda calisir
+    // (İOG-3); arayuz karesi bekletilmez. Varsayilan 400 bolum (~10-15 s).
+    if (key == 'e' || key == 'E') {
+        startTraining(400);
         return;
     }
     // P: duraklat / devam et (IG-2). Sim duraklarken draw calismaya devam
@@ -556,6 +659,84 @@ void RenderCanvas::drawResultPanel() {
         x + 22.0f, y + 160.0f);
 }
 
+void RenderCanvas::drawTrainPanel() {
+    if (!hudok_) return;
+    const BackgroundTrainer::Snapshot s = trainer_.snapshot();
+    if (s.state == BackgroundTrainer::State::Idle) return;
+    if (!trainpaneldrawn_) {
+        trainpaneldrawn_ = true;
+        std::cout << "[egitim] panel ciziliyor (durum "
+                  << static_cast<int>(s.state) << ", bolum " << s.done << "/"
+                  << s.episodes << ")" << std::endl;
+    }
+
+    // Pencere alt-solunda; sonuc paneli (orta) ile cakismaz.
+    const float w = 760.0f;
+    const float h = 76.0f;
+    const float x = 14.0f;
+    const float y = static_cast<float>(getHeight()) - h - 14.0f;
+
+    setColor(8, 12, 10, 185);
+    gDrawRectangle(x, y, w, h, true);
+
+    const bool calisiyor = s.state == BackgroundTrainer::State::Running;
+    const double yuzde = (s.episodes > 0)
+                             ? 100.0 * static_cast<double>(s.done) /
+                                   static_cast<double>(s.episodes)
+                             : 0.0;
+
+    char satir1[192];
+    if (calisiyor) {
+        std::snprintf(satir1, sizeof satir1,
+                      "EGITIM (arka plan, tek is parcacigi)   bolum %d/%d   %%%.0f",
+                      s.done, s.episodes, yuzde);
+    } else if (s.state == BackgroundTrainer::State::Done) {
+        std::snprintf(satir1, sizeof satir1,
+                      "EGITIM BITTI   %d/%d bolum   %.1f s   durum %d/2560",
+                      s.done, s.episodes, s.elapsedSeconds, s.visitedStates);
+    } else if (s.state == BackgroundTrainer::State::Failed) {
+        std::snprintf(satir1, sizeof satir1, "EGITIM HATASI");
+    } else {
+        std::snprintf(satir1, sizeof satir1, "EGITIM IPTAL EDILDI");
+    }
+
+    if (calisiyor)           setColor(225, 235, 225);
+    else if (s.state == BackgroundTrainer::State::Done) setColor(140, 225, 155);
+    else                     setColor(230, 130, 115);
+    hudfont_.drawText(satir1, x + 12.0f, y + 8.0f);
+
+    char satir2[256];
+    if (calisiyor) {
+        std::snprintf(satir2, sizeof satir2,
+                      "eps %.3f   deger %.2f s   gecen %.1f s   en uzun kare "
+                      "%.1f ms (arayuz donmuyor)",
+                      s.epsilon, s.evalTravelTime, s.elapsedSeconds, s.maxFrameMs);
+    } else if (s.state == BackgroundTrainer::State::Done) {
+        std::snprintf(satir2, sizeof satir2,
+                      "deger %.2f s   en uzun kare %.1f ms   model: %s",
+                      s.evalTravelTime, s.maxFrameMs,
+                      s.saved ? s.savePath.c_str() : "(yazilamadi)");
+    } else {
+        std::snprintf(satir2, sizeof satir2, "%s", s.message.c_str());
+    }
+    setColor(185, 200, 190);
+    hudfontsmall_.drawText(satir2, x + 12.0f, y + 32.0f);
+
+    // Ilerleme cubugu (yalnizca calisirken anlamli; bitince dolu kalir).
+    const float bx = x + 12.0f;
+    const float by = y + 54.0f;
+    const float bw = w - 24.0f;
+    setColor(40, 52, 46, 255);
+    gDrawRectangle(bx, by, bw, 8.0f, true);
+    const float dolu = static_cast<float>(bw * (yuzde / 100.0));
+    if (dolu > 0.0f) {
+        if (calisiyor)          setColor(90, 190, 120, 255);
+        else if (s.state == BackgroundTrainer::State::Done) setColor(70, 150, 95, 255);
+        else                    setColor(170, 70, 60, 255);
+        gDrawRectangle(bx, by, dolu, 8.0f, true);
+    }
+}
+
 void RenderCanvas::drawHud() {
     if (!hudok_) return;
     const World& w = scene.world();
@@ -591,7 +772,8 @@ void RenderCanvas::drawHud() {
         std::snprintf(durum, sizeof durum, "SIM BITTI (zaman asimi)");
     } else {
         std::snprintf(durum, sizeof durum,
-                      "[1-8] hiz  [P] duraklat  [T] profil  [C] kontrolcu  [Home] bastan");
+                      "[1-8] hiz  [P] duraklat  [T] profil  [C] kontrolcu  "
+                      "[E] egitim  [Home] bastan");
     }
     const char* ipucu =
         "[+/-] tekerlek: zoom   [oklar] kaydir   [R] gorunum   [D] debug   [M] olcum";

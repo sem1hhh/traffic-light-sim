@@ -91,9 +91,14 @@ const char* controllerDisplayName(ControllerKind k) noexcept {
 const char* qPolicyPathCandidate(int index) noexcept {
     // Uygulama render/ icinden calisir (assets/ de orada). Model depo
     // kokundedir; iki yol da denenir ki farkli cwd'lerde de bulunsun.
+    //
+    // IG-6: ILK aday arayuzde egitilen modeldir. Dosya yoksa asagidaki
+    // depo modeli yuklenir; yani egitim yapilmadan davranis degismez.
     switch (index) {
-        case 0: return "../models/q-medium.txt";
-        case 1: return "models/q-medium.txt";
+        case 0: return kTrainedPolicyPaths[0];
+        case 1: return "../models/q-medium.txt";
+        case 2: return kTrainedPolicyPaths[1];
+        case 3: return "models/q-medium.txt";
         default: return nullptr;
     }
 }

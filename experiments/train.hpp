@@ -5,6 +5,7 @@
 #include "bench.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -133,8 +134,16 @@ struct TrainResult {
     std::vector<double> evalCurve;      ///< bölüm -> değerlendirme yolculuk süresi
 };
 
+/// Bölüm tamamlandığında çağrılır (arayüz ilerlemesi için).
+///
+/// Neden `verbose` yetmiyor: verbose yalnızca konsola yazar; GUI ilerlemeyi
+/// okumak ister. Varsayılan boş olduğu için CLI davranışı DEĞİŞMEZ.
+/// Öğrenme tek iş parçacığındadır (İOG-3); callback de o iş parçacığında
+/// çağrılır, yani çağıran taraf kilitlemelidir.
+using TrainProgress = std::function<void(const EpisodeResult&)>;
+
 TrainResult train(const Scenario& scenario, const TrainConfig& cfg,
-                  bool verbose = false);
+                  bool verbose = false, TrainProgress progress = {});
 
 /// Egitilmis tabloyu dosyaya yazar.
 bool savePolicy(const std::string& path, const QLearningController& policy);

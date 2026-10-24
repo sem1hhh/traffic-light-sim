@@ -178,7 +178,8 @@ double epsilonAt(const TrainConfig& cfg, int episode) {
 
 }  // namespace
 
-TrainResult train(const Scenario& scenario, const TrainConfig& cfg, bool verbose) {
+TrainResult train(const Scenario& scenario, const TrainConfig& cfg, bool verbose,
+                  TrainProgress progress) {
     TrainResult sonuc;
 
     QLearningController::Params p;
@@ -228,6 +229,10 @@ TrainResult train(const Scenario& scenario, const TrainConfig& cfg, bool verbose
         r.evalSwitches = d.switchRequests;
         r.visitedStates = sonuc.policy.visitedStates();
         sonuc.history.push_back(r);
+
+        // Arayuz ilerlemesi: ogrenme TEK is parcaciginda kalir; callback
+        // ayni parcacikta cagrilir (cagiran kilitlemeli).
+        if (progress) progress(r);
 
         if (verbose && (ep % 10 == 0 || ep == cfg.episodes - 1)) {
             std::cout << "  bolum " << std::setw(4) << ep << "  eps=" << std::fixed

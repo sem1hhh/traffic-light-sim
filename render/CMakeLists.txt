@@ -1,8 +1,9 @@
 # render/ — GlistEngine arayuz katmani (Faz 7)
 #
-# AYRI bir CMake projesidir: sim-core, controllers ve experiments'tan BAGIMSIZDIR.
-# Neden ayri: GlistEngine her makinada kurulu degil. Ana build (run_tests,
-# bench, train) motor olmadan da calismalidir (AGENTS.md: CI-safe, grafik yok).
+# AYRI bir CMake projesidir: sim-core, controllers ve experiments'in CMake
+# projelerine BAGIMLI DEGILDIR (add_subdirectory ile alinmaz). Kaynak
+# dosyalari dogrudan derler; boylece ana build (run_tests, bench, train)
+# motordan bagimsiz kalir (AGENTS.md: CI-safe, grafik yok).
 # Derlemek icin:
 #   cmake -S render -B render/build -DGLIST_ENGINE_DIR=~/dev/glist/GlistEngine
 #   cmake --build render/build
@@ -76,12 +77,21 @@ set(TSC_SIM_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/q_learning.cpp
 )
 
+# Egitim/kiyaslama kodu (IG-6 Train tusu ve panel bu kodu YENIDEN YAZMAZ;
+# experiments/ altindaki dogrulanmis train()/Scenario aynen derlenir).
+# `stats.cpp` gerekmiyor: bench.cpp + train.cpp istatistik fonksiyonu cagirmaz.
+set(TSC_EXPERIMENT_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../experiments/bench.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../experiments/train.cpp
+)
+
 add_executable(tsc_render
     src/main.cpp
     src/render_app.cpp
     src/render_canvas.cpp
     src/sim_scene.cpp
     src/scene3d.cpp
+    src/trainer.cpp        # IG-6: arka plan egitimi (worker thread)
 
     # sim-core ve controllers kaynaklari DOGRUDAN buraya derlenir (kutuphane
     # olarak add_subdirectory DEGIL). Sebep: sim-core/CMakeLists.txt test
@@ -89,6 +99,7 @@ add_executable(tsc_render
     # motor + simulasyonu tek basina derleyebilmeli. Ayrica kural: o dizinlere
     # DOKUNULMAZ. Kaynak dosyalar oldugu gibi okunur, hicbiri degistirilmez.
     ${TSC_SIM_SOURCES}
+    ${TSC_EXPERIMENT_SOURCES}
 )
 
 # --- GUI'siz ofset olcumu ----------------------------------------------------
@@ -115,6 +126,7 @@ target_include_directories(tsc_render PRIVATE
     src
     ${CMAKE_CURRENT_SOURCE_DIR}/../sim-core/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers
+    ${CMAKE_CURRENT_SOURCE_DIR}/../experiments
 )
 
 target_include_directories(tsc_measure_offset PRIVATE
@@ -138,6 +150,7 @@ target_link_libraries(tsc_render PRIVATE GlistEngine)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     set_source_files_properties(
         src/main.cpp src/render_app.cpp src/render_canvas.cpp src/sim_scene.cpp
+        src/trainer.cpp
         tools/measure_offset.cpp tools/eval_check.cpp
         PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra"
     )
